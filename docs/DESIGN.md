@@ -25,6 +25,7 @@ Every AI-for-Excel tool today locks you to one vendor's models, charges a per-se
 5. Open data connectivity via MCP and local file access.
 6. Zero-server open source: nothing to host, no accounts, no telemetry by default.
 7. Model-agnostic robustness: the *harness* — capability probing, schema-enforced tool calls, post-action verification, task playbooks — guarantees precision, not the particular model the user picked (§5).
+8. Batteries included: install, run locally, change almost nothing. Capabilities that drastically improve the plugin (document import, the built-in model, playbooks) ship built in with zero configuration; users never need to learn the names of the underlying tools (§13).
 
 ### Non-goals (v1)
 
@@ -315,6 +316,7 @@ The reason existing tools choke on big workbooks is that they stuff cell data in
 - **Structural map:** sheets, used ranges, tables, named ranges, pivot caches, chart inventory.
 - **Column semantics:** for each table/region, inferred header meaning, dtype, null rate, value distribution samples (e.g., "`col C 'MRR'`: currency, 2.1% blank, range 99–48,200").
 - **Formula dependency graph:** built deterministically by parsing formulas (precedents/dependents across sheets). Powers the auditor (§10) and lets the agent answer "what feeds cell J42?" without any model call.
+- **Region clustering:** community detection over the dependency graph auto-discovers a workbook's functional modules (inputs → calculation engine → output reports), enriching the digest and the graph view (§10).
 - **Workbook digest:** a compact, model-generated summary of what the workbook *is for*, stored in memory (§12).
 
 The agent then works through **targeted-read tools** — `get_workbook_map`, `read_range`, `query_table` (filter/aggregate computed sidecar-side, only results enter context), `trace_precedents` — so a 50k-row, 20-tab model costs a few KB of context, not a few MB.
@@ -385,6 +387,7 @@ Deterministic engines the model orchestrates — cheaper, faster, and more trust
 - Detect inconsistent formulas in a column/row run (the classic copy-paste-broke-one-cell bug).
 - Flag fragile patterns: hard-coded constants inside formulas, cross-sheet indirect references, volatile functions, references into merged cells.
 - "Explain this formula" → plain-English narrative with a clickable precedent trail.
+- **Interactive workbook graph view:** the dependency graph rendered visually in the taskpane — see the workbook's structure as a graph, click an error cell and *walk* its precedent chain, with the clustered regions (§7) as the map. Makes inherited-workbook archaeology visual instead of forensic.
 
 **Cleaning toolkit:** dedupe, trim/case normalization, fuzzy matching/grouping, split/merge columns, date coercion — exposed as agent tools. The model decides *what* to do; deterministic code does it *exactly*, with change-set preview as always.
 
@@ -412,9 +415,13 @@ Memory is a *user asset*: export/import as JSON, wipe per-workbook or globally, 
 
 ---
 
-## 13. External data: MCP + local files
+## 13. External data: built-in import, MCP, local files
 
-The sidecar is a full **MCP client** (stdio and streamable-HTTP transports), which instantly inherits the ecosystem of hundreds of public MCP servers — Postgres/MySQL/SQLite, Notion, Slack, GitHub, internal REST APIs, web search, filesystems — without us writing per-source connectors.
+**Built-in document import — zero config (the default path).** Most users' "external data" is not a database; it's a PDF invoice, a Word report, a scanned table. They will never have heard of MCP or MarkItDown — and they shouldn't need to. The taskpane gets an **Import from file…** flow (also exposed to the agent as an `import_document` tool): PDF, Word, PowerPoint, HTML, and images (with OCR) are converted to structured text and tables by a **bundled converter** (Microsoft's MIT-licensed [MarkItDown](https://github.com/microsoft/markitdown); Docling under evaluation for complex PDF tables). The user previews the extracted tables and the data lands through the normal change-set preview. The converter is managed exactly like the built-in model (§4.1): nothing installed until first use, then downloaded and run as a sandboxed subprocess with zero idle cost.
+
+This reflects a general project rule: **if something drastically improves the plugin, it ships built in** — lazily downloaded if heavy, discoverable in the UI, zero configuration. Connectors and settings are escape hatches for power users, never requirements.
+
+**MCP for everything else (power users).** The sidecar is a full **MCP client** (stdio and streamable-HTTP transports), which instantly inherits the ecosystem of hundreds of public MCP servers — Postgres/MySQL/SQLite, Notion, Slack, GitHub, internal REST APIs, web search, filesystems — without us writing per-source connectors.
 
 - **Config UI** in the taskpane: add a server (command or URL), see its tools, toggle them.
 - **Permission model:** per-server allow/deny; read tools can be auto-allowed, anything that writes to an external system always prompts. Tool results are treated as **untrusted content** (§14).
@@ -443,6 +450,7 @@ The sidecar is a full **MCP client** (stdio and streamable-HTTP transports), whi
 | Model layer | Vercel AI SDK (+ generic OpenAI-compatible adapter) | Unified streaming/tool-calling across providers |
 | Built-in local model | node-llama-cpp + GGUF (Qwen3 family), opt-in | In-process inference, JSON-schema-enforced output, auto CPU/Metal/CUDA/Vulkan, lazy load / idle unload |
 | MCP | Official `@modelcontextprotocol/sdk` client | stdio + HTTP transports |
+| Document import | Bundled MarkItDown (managed sandboxed subprocess; Docling under evaluation) | PDF/Word/image → tables with zero user config, installed on first use |
 | Storage | SQLite (better-sqlite3) + sqlite-vec | Zero-config, local, vector search built in |
 | Secrets | keytar/OS keychain APIs | Never store keys in plaintext or browser storage |
 | Packaging | Installer (Win)/Homebrew (Mac)/`npx` + sideload manifest; AppSource later | Lowest-friction OSS distribution first |
@@ -459,10 +467,10 @@ Add-in skeleton + sidecar with pairing; model layer with Anthropic, OpenAI, and 
 Workbook indexer + dependency graph + targeted-read tools; `=AI()` function family + batch engine + caching; **built-in local model (opt-in) + model manager** (download/verify/lazy-load/idle-unload — it's what makes bulk ops free); cost ledger UI; formula auditor v1 (error root-causing, inconsistency detection); **post-action verification loop + adaptive harness profiles; eval suite v1; first five playbooks (reconciliation, import cleanup, budget vs. actuals, list merge/dedupe, variance dashboard)**. *Exit: works on big workbooks; bulk ops run at zero marginal cost on the built-in model; the top Excel jobs run reliably on mid-tier models.*
 
 **Phase 3 — Memory & data.**
-Three-layer memory with review UI and Custom XML workbook identity; MCP client + permission model; local multi-file tools; prompt-injection hardening; playbook library expansion + community playbook contributions. *Exit: session N+1 is smarter than N; external data flows in.*
+Three-layer memory with review UI and Custom XML workbook identity; MCP client + permission model; local multi-file tools; **built-in document import (PDF/Word/image → sheet via bundled converter)**; prompt-injection hardening; playbook library expansion + community playbook contributions. *Exit: session N+1 is smarter than N; external data flows in with zero setup.*
 
 **Phase 4 — Automation & polish.**
-Recipes (record/replay/share); Office Scripts/VBA/Power Query generation with iterate-on-error; data-cleaning toolkit; degraded no-sidecar mode; AppSource submission; docs site. *Exit: a non-programmer automates a weekly report without writing code.*
+Recipes (record/replay/share); Office Scripts/VBA/Power Query generation with iterate-on-error; data-cleaning toolkit; interactive workbook dependency-graph view; degraded no-sidecar mode; AppSource submission; docs site. *Exit: a non-programmer automates a weekly report without writing code.*
 
 **Phase 5 — ExcelLM (project fine-tune).**
 Opt-in trace collection + synthetic spreadsheet-task data; LoRA fine-tune of Qwen3-4B (Unsloth/Axolotl); SpreadsheetBench + in-repo tool-catalog eval harness; publish weights on Hugging Face; promote to recommended built-in model when it wins on evals (§4.1). *Exit: the project ships its own open model that beats stock small models on Excel work.*

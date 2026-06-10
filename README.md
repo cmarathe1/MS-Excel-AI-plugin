@@ -15,7 +15,7 @@ Because every existing one locks you to a single vendor, charges a subscription,
 - 📊 **Built for big workbooks** — a workbook indexer and formula dependency graph let the agent work on 50k-row, 20-tab models without blowing the context window.
 - ⚡ **Bulk AI functions** — `=AI()`, `=AI_CLASSIFY()`, `=AI_EXTRACT()` and friends, batched and cached, routed to cheap or local models.
 - 🧠 **Real memory** — per-workbook and per-user memory that makes every session smarter than the last. Local, visible, editable, exportable.
-- 🔌 **Open data connectivity** — connect databases, SaaS tools, and APIs through the [Model Context Protocol](https://modelcontextprotocol.io), plus read other local workbooks and CSVs.
+- 🔌 **Open data connectivity** — import PDFs, Word docs, and scanned tables into your sheet with zero setup (bundled converter), read other local workbooks and CSVs, and connect databases, SaaS tools, and APIs through the [Model Context Protocol](https://modelcontextprotocol.io) if you want to go further.
 - 🔒 **Private by default** — a local companion app keeps keys in your OS keychain and all data on your machine. No accounts, no telemetry, no server.
 
 ## Architecture in one paragraph
