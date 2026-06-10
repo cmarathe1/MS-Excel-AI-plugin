@@ -55,7 +55,7 @@ From user research across forums, reviews, and tool benchmarks:
 | Capability | Copilot in Excel | Claude in Excel | ChatGPT for Excel | GPT for Work | Cellm | **This project** |
 |---|---|---|---|---|---|---|
 | Choice of any model vendor | Partial (MS-curated picker) | ✗ (Anthropic only) | ✗ (OpenAI only) | Partial (several clouds) | ✓ (incl. local) | ✓ any cloud + any OpenAI-compatible + local |
-| Local / offline models | ✗ | ✗ | ✗ | ✓ (Ollama) | ✓ | ✓ first-class |
+| Local / offline models | ✗ | ✗ | ✗ | ✓ (Ollama) | ✓ | ✓ first-class + opt-in built-in model (zero setup) |
 | BYO API key (no subscription) | ✗ | ✗ | ✗ | ✗ (credits) | ✓ | ✓ |
 | Agentic edit with preview/undo | ✗ (direct writes) | Partial (tracks changes, no approval gate) | Partial | ✗ | ✗ | ✓ change-sets: preview → approve → undo |
 | Bulk row operations | ✗ (unreliable at scale) | ✗ | Partial | ✓ (its core strength) | ✓ | ✓ batch engine + cheap-model routing |
@@ -179,6 +179,42 @@ A provider abstraction in the sidecar (Vercel AI SDK or equivalent — unified s
 Users assign models to roles in settings; sensible defaults; per-conversation override. Fallback chains (e.g., local first, cloud on failure) are configurable.
 
 **Cost ledger.** Every call is logged (model, tokens, latency, estimated cost, originating feature) to SQLite; the taskpane shows per-day/per-workbook spend. Response caching (prompt-hash) makes repeated `=AI()` recalcs free.
+
+### 4.1 Built-in local model (opt-in, zero-setup AI)
+
+The project ships its own local open-source model option, so a user with no API key and no Ollama install can still use the plugin — **but only if they choose to**.
+
+**Strictly opt-in, zero idle cost.** The built-in model is *off by default*. Nothing is downloaded, no inference engine is initialized, and no RAM/CPU/GPU is consumed until the user explicitly enables **Built-in local model** in settings. Once enabled, the lifecycle is lazy:
+
+- Weights load into memory only on the first request routed to the built-in model.
+- After a configurable idle timeout (default 10 minutes) the model is unloaded and its memory fully released.
+- The settings UI always shows the current state — *not downloaded / on disk / loaded* — with a live memory footprint and a manual **Unload now** button.
+
+The built-in model is simply **one more entry in the provider list** (§4) next to Anthropic, OpenAI, Gemini, OpenRouter, any OpenAI-compatible endpoint, and the user's own Ollama/LM Studio. Bring-your-own-model behavior is completely unchanged, and the built-in model is never silently substituted for the user's chosen models in role routing.
+
+**Runtime: `node-llama-cpp` embedded in the sidecar.** The sidecar is already Node.js; [`node-llama-cpp`](https://github.com/withcatai/node-llama-cpp) (llama.cpp bindings) runs GGUF models in-process, auto-selects the best compute backend (CPU, Metal, CUDA, Vulkan), and — critically — can **enforce a JSON schema at the generation level**, which makes tool calling and structured extraction reliable even on small models. It plugs into the model layer as just another provider adapter. (A WebLLM/WebGPU path for the no-sidecar degraded mode is a possible later addition; browser inference is desktop-only and memory-hungry, so it is explicitly out of scope for v1.)
+
+**Model selection: hardware-adaptive tiers, permissively licensed.**
+
+| Tier | Model (GGUF) | Approx. size (Q4) | Target machine | Default roles |
+|---|---|---|---|---|
+| Minimal | Qwen3-1.7B / SmolLM3-3B / Phi-4-mini | 1–2 GB | 8 GB RAM | `bulk`, `summarize` |
+| **Default** | **Qwen3-4B-Instruct** | ~2.5 GB | 8–16 GB RAM | `bulk`, `summarize`, basic `agent` |
+| Performance | Qwen3-8B | ~5 GB | 16 GB+ RAM | full local `agent` |
+| Embeddings | Qwen3-Embedding-0.6B or nomic-embed | <1 GB | any | `embed` (memory retrieval) |
+
+Rationale: current evaluations consistently rank the small Qwen3 models, Phi-4-mini, and SmolLM3 as the strongest laptop-class models for function calling and structured output; Qwen3 and SmolLM3 are Apache-2.0 (compatible with this project's MIT license, unlike Gemma's custom terms). Spreadsheet-specific research models (TableLLM, TableGPT, SheetAgent, TableLlama) were considered and rejected as weights: they predate modern tool-calling-native generalists and underperform them — but their **datasets and benchmarks** (SpreadsheetBench, SheetCopilot) are exactly what we need for evaluation and fine-tuning (see below).
+
+**Honest capability framing.** The built-in model fully covers the high-volume, well-constrained work: `=AI()` bulk functions (where JSON-schema enforcement shines), context compaction/summarization, embeddings, and simple agent tasks. Complex multi-step agent work on messy workbooks still benefits from a frontier model or a larger local model — the role-routing table (§4) expresses this directly, e.g. built-in model as `bulk`/`summarize`/`embed` with a cloud or 8B model as `agent`.
+
+**Distribution: managed download, never weights-in-repo.** When the user opts in, the sidecar's *model manager* detects RAM/GPU, recommends a tier, and downloads the GGUF from Hugging Face with a progress UI, SHA-256 verification, and resume support, caching it in the app data directory. The installer stays small; air-gapped users can drop a GGUF into the models directory manually. Any local GGUF file can also be used in place of our recommendations — it's the same adapter.
+
+**Building our own: the ExcelLM fine-tune (roadmap Phase 5).** Where the stock small model underperforms on Excel-specific work, the open-source path is to make a better one rather than wait for one:
+
+1. **Data:** collect tool-call traces from frontier models driving *our actual agent loop* (opt-in, anonymized), plus synthesized tasks in the style of SpreadsheetBench/TableLLM datasets — formula generation and repair, table Q&A, multi-step tool sequences over realistic workbooks.
+2. **Training:** LoRA fine-tune Qwen3-4B with Unsloth/Axolotl — consumer-GPU feasible (hours, not days). Distilling a frontier model's tool-calling behavior into a small model via LoRA is a well-established technique.
+3. **Evaluation:** SpreadsheetBench plus an in-repo eval harness that replays tasks against our own tool catalog; the fine-tune becomes the recommended built-in model only when it measurably wins.
+4. **Release:** publish weights on Hugging Face under the project's org, versioned with the eval results.
 
 ---
 
@@ -315,6 +351,7 @@ The sidecar is a full **MCP client** (stdio and streamable-HTTP transports), whi
 | Add-in | Office.js + TypeScript + React, shared runtime, webpack/vite | Cross-platform (Win/Mac/web); shared runtime unifies taskpane + custom functions |
 | Sidecar | Node.js + TypeScript (Fastify + ws) | Same language across repo; rich LLM/MCP ecosystem |
 | Model layer | Vercel AI SDK (+ generic OpenAI-compatible adapter) | Unified streaming/tool-calling across providers |
+| Built-in local model | node-llama-cpp + GGUF (Qwen3 family), opt-in | In-process inference, JSON-schema-enforced output, auto CPU/Metal/CUDA/Vulkan, lazy load / idle unload |
 | MCP | Official `@modelcontextprotocol/sdk` client | stdio + HTTP transports |
 | Storage | SQLite (better-sqlite3) + sqlite-vec | Zero-config, local, vector search built in |
 | Secrets | keytar/OS keychain APIs | Never store keys in plaintext or browser storage |
@@ -329,13 +366,16 @@ The sidecar is a full **MCP client** (stdio and streamable-HTTP transports), whi
 Add-in skeleton + sidecar with pairing; model layer with Anthropic, OpenAI, and OpenAI-compatible (Ollama) adapters; chat sidebar with core read/write/format tools; change-set preview + undo; settings UI for models/keys. *Exit: a user can chat with any model and safely edit a sheet.*
 
 **Phase 2 — Scale & bulk.**
-Workbook indexer + dependency graph + targeted-read tools; `=AI()` function family + batch engine + caching; cost ledger UI; formula auditor v1 (error root-causing, inconsistency detection). *Exit: works on big workbooks; bulk ops beat GPT-for-Work on price via local models.*
+Workbook indexer + dependency graph + targeted-read tools; `=AI()` function family + batch engine + caching; **built-in local model (opt-in) + model manager** (download/verify/lazy-load/idle-unload — it's what makes bulk ops free); cost ledger UI; formula auditor v1 (error root-causing, inconsistency detection). *Exit: works on big workbooks; bulk ops run at zero marginal cost on the built-in model.*
 
 **Phase 3 — Memory & data.**
 Three-layer memory with review UI and Custom XML workbook identity; MCP client + permission model; local multi-file tools; prompt-injection hardening. *Exit: session N+1 is smarter than N; external data flows in.*
 
 **Phase 4 — Automation & polish.**
 Recipes (record/replay/share); Office Scripts/VBA/Power Query generation with iterate-on-error; data-cleaning toolkit; degraded no-sidecar mode; AppSource submission; docs site. *Exit: a non-programmer automates a weekly report without writing code.*
+
+**Phase 5 — ExcelLM (project fine-tune).**
+Opt-in trace collection + synthetic spreadsheet-task data; LoRA fine-tune of Qwen3-4B (Unsloth/Axolotl); SpreadsheetBench + in-repo tool-catalog eval harness; publish weights on Hugging Face; promote to recommended built-in model when it wins on evals (§4.1). *Exit: the project ships its own open model that beats stock small models on Excel work.*
 
 ---
 
@@ -347,6 +387,9 @@ Recipes (record/replay/share); Office Scripts/VBA/Power Query generation with it
 | Excel on the web + sidecar | Browser → localhost works in Chromium today but Private Network Access policies are tightening. Track; degraded mode is the fallback. |
 | Office.js API gaps | No VBA injection; pivot API is partial on some hosts; custom function streaming limits. Design tools against requirement sets, feature-detect per host. |
 | Model variance | Tool-calling quality varies wildly across local models. Capability probing + prompt-emulation fallback; document recommended local models. |
+| Built-in model download UX | A ~2.5 GB first download can feel heavy. Opt-in only, tiered recommendations by detected hardware, resumable verified downloads, clear size labels before consent. |
+| Low-end hardware performance | Small models on old CPUs are slow. Tier recommendations, token-rate preflight test on enable, honest messaging steering heavy agent work to BYO cloud models. |
+| Small-model tool-calling reliability | 4B-class models mis-format tool calls more than frontier models. JSON-schema-enforced generation in node-llama-cpp + constrained tool subsets for the `bulk` role. |
 | Indexer freshness | Change-event coverage in Office.js is imperfect; use event + lazy revalidation hybrid. |
 | MCP server trust | Arbitrary stdio servers run code on the user's machine. Clear warnings, no bundled servers without review, allowlist UX. |
 | AppSource review | Marketplace policies around external services/keys; sideload-first keeps us shipping regardless. |

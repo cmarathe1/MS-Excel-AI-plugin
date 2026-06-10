@@ -9,6 +9,7 @@ Connect **any** AI model — Claude, OpenAI, Gemini, OpenRouter, any OpenAI-comp
 Because every existing one locks you to a single vendor, charges a subscription, writes into your sheets with no preview, forgets everything between sessions, and can't see anything outside the open workbook. This project is built around exactly those gaps:
 
 - 🔑 **Bring your own model** — your keys, your endpoints, your local models. Works 100% offline with Ollama.
+- 📦 **Optional built-in local model** — flip one switch and the plugin works with no API key, no Ollama, no setup (a small Apache-2.0 model like Qwen3-4B, run in-process). Strictly opt-in: it downloads nothing and consumes zero memory or compute until you enable it, loads lazily on first use, and unloads itself when idle. A project fine-tune specialized for spreadsheet work (**ExcelLM**) is on the roadmap.
 - 🛡️ **Safe agentic edits** — every AI change is a reviewable change-set: preview → approve → one-click undo, with a full audit log.
 - 📊 **Built for big workbooks** — a workbook indexer and formula dependency graph let the agent work on 50k-row, 20-tab models without blowing the context window.
 - ⚡ **Bulk AI functions** — `=AI()`, `=AI_CLASSIFY()`, `=AI_EXTRACT()` and friends, batched and cached, routed to cheap or local models.
