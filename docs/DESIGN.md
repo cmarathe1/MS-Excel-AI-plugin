@@ -59,7 +59,7 @@ From user research across forums, reviews, and tool benchmarks:
 | Local / offline models | ✗ | ✗ | ✗ | ✓ (Ollama) | ✓ | ✓ first-class + opt-in built-in model (zero setup) |
 | BYO API key (no subscription) | ✗ | ✗ | ✗ | ✗ (credits) | ✓ | ✓ |
 | Agentic edit with preview/undo | ✗ (direct writes) | Partial (tracks changes, no approval gate) | Partial | ✗ | ✗ | ✓ change-sets: preview → approve → undo |
-| Bulk row operations | ✗ (unreliable at scale) | ✗ | Partial | ✓ (its core strength) | ✓ | ✓ batch engine + cheap-model routing |
+| Bulk row operations | ✗ (unreliable at scale) | ✗ | Partial | ✓ (its core strength) | ✓ | ✓ batch engine (+ optional cheap-model routing) |
 | Large multi-tab workbooks | ✗ | ✗ (context ceiling) | ✗ | n/a | n/a | ✓ workbook indexer + targeted reads |
 | Formula auditing / dependency tracing | Partial | Partial (explains) | Partial | ✗ | ✗ | ✓ deterministic dependency graph + AI explanation |
 | VBA / Office Scripts / Power Query help | Partial (unreliable) | ✗ (unsupported) | ✗ (unreliable) | ✗ | ✗ | ✓ generate + iterate-on-error, plus model-free Recipes |
@@ -168,16 +168,18 @@ A provider abstraction in the sidecar (Vercel AI SDK or equivalent — unified s
 - **Generic OpenAI-compatible adapter:** covers Ollama, LM Studio, vLLM, llama.cpp server, LiteLLM gateways, Azure OpenAI, Groq, Together, DeepSeek, Mistral — anything with a base URL and optionally a key. This one adapter is what makes "any model" true forever.
 - **Capability probing:** on connect, detect tool-calling, vision, and context-length support; degrade gracefully (e.g., prompt-based tool emulation for models without native tool calling).
 
-**Per-task model routing.** One model rarely fits all jobs:
+**One model, used for everything — the default.** The user picks a single model, and that model performs *all* tasks: the chat agent, `=AI()` bulk functions, summarization and context compaction, workbook digests. No hidden second model is ever invoked on the user's behalf; the harness (§5) adapts its scaffolding to whatever the chosen model can do. One technical exception is unavoidable: **embeddings** for memory retrieval, which chat models don't produce. If the chosen provider exposes an embedding endpoint (OpenAI, Gemini, Ollama, the built-in model's embedding companion), it is used; otherwise memory retrieval transparently falls back to keyword search (SQLite FTS5) — still no second LLM.
 
-| Role | Typical assignment | Used for |
-|---|---|---|
-| `agent` | Frontier model (Claude, GPT) | Chat agent, planning, multi-step edits |
-| `bulk` | Cheap/fast or local model | `=AI()` custom functions over many rows |
-| `embed` | Local embedding model (via Ollama) or cloud | Memory retrieval |
-| `summarize` | Cheap model | Context compaction, workbook digests |
+**Optional per-task routing (advanced, off by default).** Users who *want* to split work across models can enable routing in advanced settings:
 
-Users assign models to roles in settings; sensible defaults; per-conversation override. Fallback chains (e.g., local first, cloud on failure) are configurable.
+| Task type | Typical assignment when routing is enabled |
+|---|---|
+| `agent` (chat, planning, multi-step edits) | Frontier model (Claude, GPT) |
+| `bulk` (`=AI()` functions over many rows) | Cheap/fast or local model |
+| `summarize` (compaction, digests) | Cheap model |
+| `embed` (memory retrieval) | Local or cloud embedding model |
+
+With routing off (the default), all four task types resolve to the single chosen model. Fallback chains (e.g., local first, cloud on failure) are likewise opt-in configuration, never silent behavior.
 
 **Cost ledger.** Every call is logged (model, tokens, latency, estimated cost, originating feature) to SQLite; the taskpane shows per-day/per-workbook spend. Response caching (prompt-hash) makes repeated `=AI()` recalcs free.
 
@@ -191,22 +193,22 @@ The project ships its own local open-source model option, so a user with no API 
 - After a configurable idle timeout (default 10 minutes) the model is unloaded and its memory fully released.
 - The settings UI always shows the current state — *not downloaded / on disk / loaded* — with a live memory footprint and a manual **Unload now** button.
 
-The built-in model is simply **one more entry in the provider list** (§4) next to Anthropic, OpenAI, Gemini, OpenRouter, any OpenAI-compatible endpoint, and the user's own Ollama/LM Studio. Bring-your-own-model behavior is completely unchanged, and the built-in model is never silently substituted for the user's chosen models in role routing.
+The built-in model is simply **one more entry in the provider list** (§4) next to Anthropic, OpenAI, Gemini, OpenRouter, any OpenAI-compatible endpoint, and the user's own Ollama/LM Studio. Bring-your-own-model behavior is completely unchanged, and the built-in model is never silently substituted for the user's chosen model.
 
 **Runtime: `node-llama-cpp` embedded in the sidecar.** The sidecar is already Node.js; [`node-llama-cpp`](https://github.com/withcatai/node-llama-cpp) (llama.cpp bindings) runs GGUF models in-process, auto-selects the best compute backend (CPU, Metal, CUDA, Vulkan), and — critically — can **enforce a JSON schema at the generation level**, which makes tool calling and structured extraction reliable even on small models. It plugs into the model layer as just another provider adapter. (A WebLLM/WebGPU path for the no-sidecar degraded mode is a possible later addition; browser inference is desktop-only and memory-hungry, so it is explicitly out of scope for v1.)
 
 **Model selection: hardware-adaptive tiers, permissively licensed.**
 
-| Tier | Model (GGUF) | Approx. size (Q4) | Target machine | Default roles |
+| Tier | Model (GGUF) | Approx. size (Q4) | Target machine | Best suited for |
 |---|---|---|---|---|
-| Minimal | Qwen3-1.7B / SmolLM3-3B / Phi-4-mini | 1–2 GB | 8 GB RAM | `bulk`, `summarize` |
-| **Default** | **Qwen3-4B-Instruct** | ~2.5 GB | 8–16 GB RAM | `bulk`, `summarize`, basic `agent` |
-| Performance | Qwen3-8B | ~5 GB | 16 GB+ RAM | full local `agent` |
-| Embeddings | Qwen3-Embedding-0.6B or nomic-embed | <1 GB | any | `embed` (memory retrieval) |
+| Minimal | Qwen3-1.7B / SmolLM3-3B / Phi-4-mini | 1–2 GB | 8 GB RAM | Bulk cell functions, summarization |
+| **Default** | **Qwen3-4B-Instruct** | ~2.5 GB | 8–16 GB RAM | All tasks incl. basic agent work |
+| Performance | Qwen3-8B | ~5 GB | 16 GB+ RAM | All tasks incl. full agent work |
+| Embeddings | Qwen3-Embedding-0.6B or nomic-embed | <1 GB | any | Memory retrieval (embeddings) |
 
 Rationale: current evaluations consistently rank the small Qwen3 models, Phi-4-mini, and SmolLM3 as the strongest laptop-class models for function calling and structured output; Qwen3 and SmolLM3 are Apache-2.0 (compatible with this project's MIT license, unlike Gemma's custom terms). Spreadsheet-specific research models (TableLLM, TableGPT, SheetAgent, TableLlama) were considered and rejected as weights: they predate modern tool-calling-native generalists and underperform them — but their **datasets and benchmarks** (SpreadsheetBench, SheetCopilot) are exactly what we need for evaluation and fine-tuning (see below).
 
-**Honest capability framing.** The built-in model fully covers the high-volume, well-constrained work: `=AI()` bulk functions (where JSON-schema enforcement shines), context compaction/summarization, embeddings, and simple agent tasks. Complex multi-step agent work on messy workbooks still benefits from a frontier model or a larger local model — the role-routing table (§4) expresses this directly, e.g. built-in model as `bulk`/`summarize`/`embed` with a cloud or 8B model as `agent`.
+**Honest capability framing.** The built-in model fully covers the high-volume, well-constrained work: `=AI()` bulk functions (where JSON-schema enforcement shines), context compaction/summarization, embeddings, and simple agent tasks. Complex multi-step agent work on messy workbooks still benefits from a stronger model. In the default single-model setup that simply means picking the strongest model the machine (or budget) allows; users who enable optional routing (§4) can pair the built-in model for bulk/summarization with a cloud model for agent work.
 
 **Distribution: managed download, never weights-in-repo.** When the user opts in, the sidecar's *model manager* detects RAM/GPU, recommends a tier, and downloads the GGUF from Hugging Face with a progress UI, SHA-256 verification, and resume support, caching it in the app data directory. The installer stays small; air-gapped users can drop a GGUF into the models directory manually. Any local GGUF file can also be used in place of our recommendations — it's the same adapter.
 
@@ -229,7 +231,7 @@ Six mechanisms turn that principle into engineering:
 
 ### 5.1 Capability probe & model report card
 
-The moment a user connects any model, the sidecar runs a short automated probe suite (~1–2 minutes, a few cents or free locally): tool-call fidelity over our actual tool schemas, JSON-schema adherence, multi-step instruction following, effective usable context, vision support. The result is a **report card** — a grade per role (`agent` / `bulk` / `summarize` / `embed`) shown in settings. Grades drive role-routing suggestions and feature gating with honest messaging ("this model is great for bulk cell work; multi-step editing will be unreliable — consider routing `agent` elsewhere") instead of silent failure. Users can override; the report card is advice, not a cage.
+The moment a user connects any model, the sidecar runs a short automated probe suite (~1–2 minutes, a few cents or free locally): tool-call fidelity over our actual tool schemas, JSON-schema adherence, multi-step instruction following, effective usable context, vision support. The result is a **report card** — a grade per task type (agent work / bulk cells / summarization / embeddings) shown in settings. Since one chosen model performs all tasks by default, the report card's job is to tell the user plainly what *their* model will and won't do well ("great for bulk cell work; multi-step editing will be unreliable on this model") instead of failing silently — and the harness profile (§5.2) adapts accordingly. For users who enable optional routing (§4), the grades double as assignment suggestions. Users can override; the report card is advice, not a cage.
 
 ### 5.2 Adaptive harness profiles
 
@@ -348,7 +350,7 @@ Trusted-mode toggle ("auto-apply reads + formatting, ask for value/formula/struc
 ### 8.3 Context discipline
 
 - System context = workbook digest + structural map + relevant memories (retrieved, not dumped).
-- Long conversations auto-compact via the `summarize` model; decisions worth keeping are promoted to memory (§12).
+- Long conversations auto-compact via a summarization pass (the user's chosen model by default); decisions worth keeping are promoted to memory (§12).
 
 ---
 
@@ -369,7 +371,7 @@ Implementation notes:
 
 - Functions forward to the sidecar **batch engine**: dedupe identical prompts, micro-batch rows into single requests where the model allows, global concurrency + rate-limit budget, exponential backoff, progress surfaced in the taskpane.
 - **Caching by default:** results memoized on (model, prompt, inputs) so recalc storms don't re-bill. Volatile mode opt-in.
-- Routed to the `bulk` model role — this is where local/cheap models shine and where BYOM saves real money.
+- Run on the user's chosen model by default; with optional routing enabled (§4) they can be sent to a cheap or local model instead — this is where BYOM saves real money on large sheets.
 - Failures return Excel errors (`#AI_TIMEOUT!`-style messages via error values), never silently wrong values; a "fill failures only" retry action.
 
 ---
@@ -404,7 +406,7 @@ Three layers, all local (SQLite + `sqlite-vec` embeddings in the sidecar), all u
 2. **Workbook memory (per file):** what this workbook means — the digest, column semantics, conventions ("fiscal year starts April", "sheet `Raw` is never edited by hand"), and decisions made in past sessions. Keyed by a stable workbook ID stored in a **Custom XML part** inside the file itself, so memory survives renames/moves and a small portable digest travels *with* the file to other machines.
 3. **User memory (global):** standing instructions and preferences ("always preview", "currency = EUR", "I prefer formulas over hard-coded values"), extracted automatically when the user states them and confirmable before saving.
 
-**Write path:** after each session, the `summarize` model proposes candidate memories (facts, decisions, preferences); heuristics + dedupe filter them; the user can review/edit anything. **Read path:** at conversation start and on topic shifts, top-k retrieval (vector + recency + layer priority) injects only relevant memories into context.
+**Write path:** after each session, a summarization pass (the user's chosen model by default) proposes candidate memories (facts, decisions, preferences); heuristics + dedupe filter them; the user can review/edit anything. **Read path:** at conversation start and on topic shifts, top-k retrieval (vector + recency + layer priority) injects only relevant memories into context.
 
 Memory is a *user asset*: export/import as JSON, wipe per-workbook or globally, nothing leaves the machine.
 
@@ -477,7 +479,7 @@ Opt-in trace collection + synthetic spreadsheet-task data; LoRA fine-tune of Qwe
 | Model variance | Tool-calling quality varies wildly across local models. Capability probing + prompt-emulation fallback; document recommended local models. |
 | Built-in model download UX | A ~2.5 GB first download can feel heavy. Opt-in only, tiered recommendations by detected hardware, resumable verified downloads, clear size labels before consent. |
 | Low-end hardware performance | Small models on old CPUs are slow. Tier recommendations, token-rate preflight test on enable, honest messaging steering heavy agent work to BYO cloud models. |
-| Small-model tool-calling reliability | 4B-class models mis-format tool calls more than frontier models. JSON-schema-enforced generation in node-llama-cpp + constrained tool subsets for the `bulk` role. |
+| Small-model tool-calling reliability | 4B-class models mis-format tool calls more than frontier models. JSON-schema-enforced generation in node-llama-cpp + constrained tool subsets for bulk cell functions. |
 | Playbook coverage gaps | Requests that almost-match a playbook may get forced into the wrong template. Conservative intent matching with user confirmation; free-form fallback always available. |
 | Probe cost & friction | The capability probe costs a few cents and ~2 minutes on connect. Cache results per model+version, allow skip with "ungraded" warning. |
 | Indexer freshness | Change-event coverage in Office.js is imperfect; use event + lazy revalidation hybrid. |
