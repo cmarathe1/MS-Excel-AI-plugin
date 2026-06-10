@@ -1,0 +1,26 @@
+{
+  "name": "@excelai/addin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"covered by typecheck and sidecar integration tests\"",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@excelai/shared": "workspace:*",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/custom-functions-runtime": "^1.6.12",
+    "@types/office-js": "^1.0.460",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@excelai/sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsc -p tsconfig.json && node --no-warnings dist/index.js",
+    "start": "node --no-warnings dist/index.js",
+    "smoke": "node --no-warnings scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@excelai/shared": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

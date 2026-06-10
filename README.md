@@ -28,7 +28,27 @@ The full design — problem analysis, competitive gaps, architecture, safety mod
 
 ## Status
 
-🚧 Design phase. No code yet — the design document above is the current deliverable. Feedback and contributions to the design are welcome via issues.
+🚧 **Phase 1 (Foundation) implemented** — see the [roadmap](docs/DESIGN.md#16-phased-roadmap):
+
+- ✅ Monorepo: `shared/` (tool schemas + WS protocol) · `sidecar/` (Node daemon) · `addin/` (Office.js)
+- ✅ Model layer: Anthropic, OpenAI, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, …)
+- ✅ Agent loop with schema-validated tools, repair-retry for malformed calls, and emulated tool calling for models without native support
+- ✅ Change-sets: stage → preview (with reasons) → approve → verify (auto-rollback on introduced errors) → one-click undo
+- ✅ Sidecar: pairing-code auth, provider settings API, `=AI()` function batch engine with caching, cost ledger, FTS-backed memory store
+- ✅ Headless workbook emulator with a real formula engine, so the entire stack is tested without Excel: 40 unit/integration tests + a full-stack E2E smoke test (`pnpm smoke`)
+- ⬜ Workbook indexer, playbooks, built-in local model, MCP, document import — next phases
+
+### Run it
+
+```bash
+pnpm install        # Node >= 22.13
+pnpm check && pnpm test && pnpm smoke   # typecheck, tests, full-stack E2E
+pnpm build && pnpm dev:sidecar          # start the sidecar (prints a pairing code)
+```
+
+Then sideload `addin/manifest.xml` into Excel (web: Home → Add-ins → More Settings → Upload My Add-in), enter the pairing code in the task pane, pick your model, and chat.
+
+> Current dev targets: Excel on Windows and Excel on the web (Chromium). Excel for Mac needs an HTTPS-localhost story (WKWebView blocks mixed content) — tracked in the design risks.
 
 ## License
 

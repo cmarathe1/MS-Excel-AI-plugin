@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+           xsi:type="TaskPaneApp">
+  <Id>7f6a02d3-3f80-4f31-9d7c-8a4f3e2b9c01</Id>
+  <Version>0.1.0</Version>
+  <ProviderName>excel-ai-plugin (open source)</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Excel AI"/>
+  <Description DefaultValue="Bring-your-own-model AI assistant for Excel. Open source, local-first."/>
+  <IconUrl DefaultValue="http://localhost:8923/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="http://localhost:8923/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://github.com/cmarathe1/ms-excel-ai-plugin"/>
+  <Hosts>
+    <Host Name="Workbook"/>
+  </Hosts>
+  <Requirements>
+    <Sets DefaultMinVersion="1.1">
+      <Set Name="SharedRuntime" MinVersion="1.1"/>
+    </Sets>
+  </Requirements>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://localhost:8923/taskpane.html"/>
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Workbook">
+        <Runtimes>
+          <Runtime resid="Shared.Url" lifetime="long"/>
+        </Runtimes>
+        <AllFormFactors>
+          <ExtensionPoint xsi:type="CustomFunctions">
+            <Script>
+              <SourceLocation resid="Functions.Script.Url"/>
+            </Script>
+            <Page>
+              <SourceLocation resid="Shared.Url"/>
+            </Page>
+            <Metadata>
+              <SourceLocation resid="Functions.Metadata.Url"/>
+            </Metadata>
+            <Namespace resid="Functions.Namespace"/>
+          </ExtensionPoint>
+        </AllFormFactors>
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="GetStarted.Title"/>
+            <Description resid="GetStarted.Description"/>
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl"/>
+          </GetStarted>
+          <FunctionFile resid="Shared.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ExcelAI.Group">
+                <Label resid="Group.Label"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16"/>
+                  <bt:Image size="32" resid="Icon.32"/>
+                  <bt:Image size="80" resid="Icon.80"/>
+                </Icon>
+                <Control xsi:type="Button" id="ExcelAI.OpenPane">
+                  <Label resid="OpenPane.Label"/>
+                  <Supertip>
+                    <Title resid="OpenPane.Label"/>
+                    <Description resid="OpenPane.Tooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ExcelAI.Taskpane</TaskpaneId>
+                    <SourceLocation resid="Shared.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16" DefaultValue="http://localhost:8923/assets/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="http://localhost:8923/assets/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="http://localhost:8923/assets/icon-80.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="Shared.Url" DefaultValue="http://localhost:8923/taskpane.html"/>
+        <bt:Url id="Functions.Script.Url" DefaultValue="http://localhost:8923/assets/functions.js"/>
+        <bt:Url id="Functions.Metadata.Url" DefaultValue="http://localhost:8923/functions.json"/>
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/cmarathe1/ms-excel-ai-plugin"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Functions.Namespace" DefaultValue="EXCELAI"/>
+        <bt:String id="Group.Label" DefaultValue="Excel AI"/>
+        <bt:String id="OpenPane.Label" DefaultValue="Excel AI"/>
+        <bt:String id="GetStarted.Title" DefaultValue="Excel AI is ready"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="OpenPane.Tooltip" DefaultValue="Open the Excel AI assistant"/>
+        <bt:String id="GetStarted.Description" DefaultValue="Open the task pane from the Home tab, pair with the local sidecar, and pick your model."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

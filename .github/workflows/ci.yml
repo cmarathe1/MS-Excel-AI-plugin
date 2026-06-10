@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm check
+      - name: Unit & integration tests
+        run: pnpm test
+      - name: Build all packages
+        run: pnpm build
+      - name: End-to-end smoke test (full stack, mock model)
+        run: pnpm --filter @excelai/sidecar smoke
