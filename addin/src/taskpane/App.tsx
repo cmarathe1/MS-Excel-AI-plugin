@@ -356,9 +356,37 @@ function OpRow({ item }: { item: ChangePreviewItem }): JSX.Element {
       target = op.range;
       desc = `format: ${Object.keys(op.format).join(', ')}`;
       break;
+    case 'sort_range':
+      target = op.range;
+      desc = `sort ${op.ascending ? '↑' : '↓'}`;
+      break;
     case 'add_sheet':
       target = op.name;
       desc = 'new sheet';
+      break;
+    case 'rename_sheet':
+      target = op.name;
+      desc = `rename → ${op.newName}`;
+      break;
+    case 'delete_sheet':
+      target = op.name;
+      desc = 'delete sheet';
+      break;
+    case 'insert_rows':
+      target = op.sheet;
+      desc = `insert ${op.count} row${op.count === 1 ? '' : 's'} at ${op.at + 1}`;
+      break;
+    case 'delete_rows':
+      target = op.sheet;
+      desc = `delete ${op.count} row${op.count === 1 ? '' : 's'} at ${op.at + 1}`;
+      break;
+    case 'insert_cols':
+      target = op.sheet;
+      desc = `insert ${op.count} col${op.count === 1 ? '' : 's'}`;
+      break;
+    case 'delete_cols':
+      target = op.sheet;
+      desc = `delete ${op.count} col${op.count === 1 ? '' : 's'}`;
       break;
   }
   return (
@@ -516,17 +544,21 @@ function ModelsScreen({ onChanged }: { onChanged: () => void }): JSX.Element {
   };
 
   const activate = (id: string): void => {
-    void api(`/api/settings/providers/${id}/activate`, { method: 'POST' }).then(() => {
-      load();
-      onChanged();
-    });
+    void api(`/api/settings/providers/${id}/activate`, { method: 'POST' })
+      .then(() => {
+        load();
+        onChanged();
+      })
+      .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`));
   };
 
   const remove = (id: string): void => {
-    void api(`/api/settings/providers/${id}`, { method: 'DELETE' }).then(() => {
-      load();
-      onChanged();
-    });
+    void api(`/api/settings/providers/${id}`, { method: 'DELETE' })
+      .then(() => {
+        load();
+        onChanged();
+      })
+      .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`));
   };
 
   const testSaved = (id: string): void => {

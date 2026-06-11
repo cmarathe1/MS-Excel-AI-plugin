@@ -1,4 +1,4 @@
-import type { CellData, ChangeOp, WorkbookMap } from '@excelai/shared';
+import { indexToCol, type BorderFormat, type CellData, type ChangeOp, type WorkbookMap } from '@excelai/shared';
 
 /**
  * The "hands": executes workbook tools against real Excel via Office.js.
@@ -63,6 +63,49 @@ export async function applyOps(ops: ChangeOp[]): Promise<void> {
           getRange(context, op.range).clear(Excel.ClearApplyTo.contents);
           break;
         }
+        case 'rename_sheet': {
+          context.workbook.worksheets.getItem(op.name).name = op.newName;
+          break;
+        }
+        case 'delete_sheet': {
+          context.workbook.worksheets.getItem(op.name).delete();
+          break;
+        }
+        case 'insert_rows': {
+          // Row addresses are 1-based in A1 notation; op.at is 0-based.
+          const sheet = context.workbook.worksheets.getItem(op.sheet);
+          sheet.getRange(`${op.at + 1}:${op.at + op.count}`).insert(Excel.InsertShiftDirection.down);
+          break;
+        }
+        case 'delete_rows': {
+          const sheet = context.workbook.worksheets.getItem(op.sheet);
+          sheet.getRange(`${op.at + 1}:${op.at + op.count}`).delete(Excel.DeleteShiftDirection.up);
+          break;
+        }
+        case 'insert_cols': {
+          const sheet = context.workbook.worksheets.getItem(op.sheet);
+          sheet
+            .getRange(`${indexToCol(op.at)}:${indexToCol(op.at + op.count - 1)}`)
+            .insert(Excel.InsertShiftDirection.right);
+          break;
+        }
+        case 'delete_cols': {
+          const sheet = context.workbook.worksheets.getItem(op.sheet);
+          sheet
+            .getRange(`${indexToCol(op.at)}:${indexToCol(op.at + op.count - 1)}`)
+            .delete(Excel.DeleteShiftDirection.left);
+          break;
+        }
+        case 'sort_range': {
+          const range = getRange(context, op.range);
+          range.sort.apply(
+            [{ key: op.keyOffset, ascending: op.ascending }],
+            false,
+            op.hasHeader,
+            Excel.SortOrientation.rows,
+          );
+          break;
+        }
         case 'format_range': {
           const range = getRange(context, op.range);
           const f = op.format;
@@ -85,6 +128,9 @@ export async function applyOps(ops: ChangeOp[]): Promise<void> {
               right: Excel.HorizontalAlignment.right,
             }[f.horizontalAlignment];
           }
+          if (f.fontSize !== undefined) range.format.font.size = f.fontSize;
+          if (f.wrapText !== undefined) range.format.wrapText = f.wrapText;
+          if (f.border !== undefined) applyBorders(range, f.border);
           if (f.autofitColumns) range.format.autofitColumns();
           break;
         }
@@ -102,6 +148,80 @@ export async function applyOps(ops: ChangeOp[]): Promise<void> {
       // Apply ops in order so later ops can target sheets created earlier.
       await context.sync();
     }
+  });
+}
+
+const EDGE_MAP: Record<string, Excel.BorderIndex[]> = {
+  top: [Excel.BorderIndex.edgeTop],
+  bottom: [Excel.BorderIndex.edgeBottom],
+  left: [Excel.BorderIndex.edgeLeft],
+  right: [Excel.BorderIndex.edgeRight],
+  insideHorizontal: [Excel.BorderIndex.insideHorizontal],
+  insideVertical: [Excel.BorderIndex.insideVertical],
+  outline: [
+    Excel.BorderIndex.edgeTop,
+    Excel.BorderIndex.edgeBottom,
+    Excel.BorderIndex.edgeLeft,
+    Excel.BorderIndex.edgeRight,
+  ],
+  all: [
+    Excel.BorderIndex.edgeTop,
+    Excel.BorderIndex.edgeBottom,
+    Excel.BorderIndex.edgeLeft,
+    Excel.BorderIndex.edgeRight,
+    Excel.BorderIndex.insideHorizontal,
+    Excel.BorderIndex.insideVertical,
+  ],
+};
+
+function applyBorders(range: Excel.Range, border: BorderFormat): void {
+  const style =
+    border.style === 'double' ? Excel.BorderLineStyle.double : Excel.BorderLineStyle.continuous;
+  const weight =
+    border.style === 'thick'
+      ? Excel.BorderWeight.thick
+      : border.style === 'medium'
+        ? Excel.BorderWeight.medium
+        : Excel.BorderWeight.thin;
+  const indexes = new Set<Excel.BorderIndex>();
+  for (const edge of border.edges) for (const idx of EDGE_MAP[edge] ?? []) indexes.add(idx);
+  for (const idx of indexes) {
+    const b = range.format.borders.getItem(idx);
+    b.style = style;
+    b.weight = weight;
+    if (border.color) b.color = border.color;
+  }
+}
+
+/** Case-insensitive substring search across sheets, capped at 50 matches. */
+export async function findCells(
+  query: string,
+  sheetName?: string,
+): Promise<{ address: string; value: string }[]> {
+  return Excel.run(async (context) => {
+    const sheets = context.workbook.worksheets;
+    sheets.load('items/name');
+    await context.sync();
+    const targets = sheets.items.filter((ws) => !sheetName || ws.name === sheetName);
+    if (sheetName && targets.length === 0) throw new Error(`No such sheet: ${sheetName}`);
+
+    const matches: { address: string; value: string }[] = [];
+    for (const ws of targets) {
+      const found = ws.findAllOrNullObject(query, { completeMatch: false, matchCase: false });
+      found.load(['address', 'isNullObject']);
+      await context.sync();
+      if (found.isNullObject) continue;
+      for (const address of found.address.split(',')) {
+        // Expand multi-cell areas conservatively: report the area address.
+        const range = ws.getRange(address);
+        range.load(['values', 'address']);
+        await context.sync();
+        const flat = range.values.flat();
+        matches.push({ address: range.address, value: String(flat[0] ?? '') });
+        if (matches.length >= 50) return matches;
+      }
+    }
+    return matches;
   });
 }
 

@@ -2,6 +2,8 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import {
   toolSchemas,
   isWriteTool,
+  colToIndex,
+  parseA1,
   type ChangeOp,
   type ToolName,
   type ChangePreviewItem,
@@ -222,6 +224,10 @@ async function executeToolCall(
         }
         return json;
       }
+      case 'find': {
+        const matches = await executor.find(args.query as string, args.sheet as string | undefined);
+        return JSON.stringify({ ok: true, result: matches });
+      }
       default:
         return errorResult(`Tool ${toolName} is not executable here.`);
     }
@@ -259,6 +265,49 @@ function toChangeOp(name: ToolName, args: Record<string, unknown>): ChangeOp {
       };
     case 'add_sheet':
       return { kind: 'add_sheet', name: args.name as string, reason: args.reason as string };
+    case 'rename_sheet':
+      return {
+        kind: 'rename_sheet',
+        name: args.name as string,
+        newName: args.newName as string,
+        reason: args.reason as string,
+      };
+    case 'delete_sheet':
+      return { kind: 'delete_sheet', name: args.name as string, reason: args.reason as string };
+    case 'insert_rows':
+    case 'delete_rows':
+      return {
+        kind: name,
+        sheet: args.sheet as string,
+        at: (args.at as number) - 1, // model speaks 1-based rows
+        count: args.count as number,
+        reason: args.reason as string,
+      };
+    case 'insert_cols':
+    case 'delete_cols':
+      return {
+        kind: name,
+        sheet: args.sheet as string,
+        at: colToIndex((args.at as string).toUpperCase()),
+        count: args.count as number,
+        reason: args.reason as string,
+      };
+    case 'sort_range': {
+      const range = args.range as string;
+      const addr = parseA1(range);
+      const keyOffset = colToIndex((args.keyColumn as string).toUpperCase()) - addr.startCol;
+      if (keyOffset < 0 || keyOffset > addr.endCol - addr.startCol) {
+        throw new Error(`keyColumn ${String(args.keyColumn)} is outside the range ${range}`);
+      }
+      return {
+        kind: 'sort_range',
+        range,
+        keyOffset,
+        ascending: args.ascending as boolean,
+        hasHeader: args.hasHeader as boolean,
+        reason: args.reason as string,
+      };
+    }
     default:
       throw new Error(`Not a write tool: ${name}`);
   }
@@ -270,9 +319,19 @@ function summarize(name: ToolName, args: Record<string, unknown>): string {
     case 'write_range':
     case 'clear_range':
     case 'format_range':
+    case 'sort_range':
       return String(args.range ?? '');
     case 'add_sheet':
+    case 'rename_sheet':
+    case 'delete_sheet':
       return String(args.name ?? '');
+    case 'insert_rows':
+    case 'delete_rows':
+    case 'insert_cols':
+    case 'delete_cols':
+      return `${String(args.sheet ?? '')} @${String(args.at ?? '')}×${String(args.count ?? 1)}`;
+    case 'find':
+      return String(args.query ?? '');
     default:
       return '';
   }

@@ -37,9 +37,19 @@ export class ChangeSetManager {
   ) {}
 
   stage(ops: ChangeOp[]): ChangeSet {
-    // Sheet creation and formatting are not snapshot-restorable in v1:
-    // undo restores values/formulas exactly, but not prior formatting.
-    const hasStructural = ops.some((op) => op.kind === 'add_sheet' || op.kind === 'format_range');
+    // Structural/format ops are not snapshot-restorable in v1: undo restores
+    // values and formulas exactly, but not sheet structure or formatting.
+    const NON_RESTORABLE: ChangeOp['kind'][] = [
+      'add_sheet',
+      'rename_sheet',
+      'delete_sheet',
+      'format_range',
+      'insert_rows',
+      'delete_rows',
+      'insert_cols',
+      'delete_cols',
+    ];
+    const hasStructural = ops.some((op) => NON_RESTORABLE.includes(op.kind));
     const cs: ChangeSet = {
       id: randomUUID(),
       workbookId: this.workbookId,
@@ -64,7 +74,7 @@ export class ChangeSetManager {
     const cs = this.mustGet(id, 'staged');
     const items: ChangePreviewItem[] = [];
     for (const op of cs.ops) {
-      if (op.kind === 'write_range' || op.kind === 'clear_range') {
+      if (op.kind === 'write_range' || op.kind === 'clear_range' || op.kind === 'sort_range') {
         let before: CellData[][] | undefined;
         try {
           before = await this.executor.readRange(op.range);
@@ -91,7 +101,7 @@ export class ChangeSetManager {
     const snapshots: RangeSnapshot[] = [];
     let snapshotCells = 0;
     for (const op of cs.ops) {
-      if (op.kind !== 'write_range' && op.kind !== 'clear_range') continue;
+      if (op.kind !== 'write_range' && op.kind !== 'clear_range' && op.kind !== 'sort_range') continue;
       const addr = parseA1(op.range);
       snapshotCells += rangeCellCount(addr);
       if (snapshotCells > MAX_SNAPSHOT_CELLS) {
@@ -117,7 +127,7 @@ export class ChangeSetManager {
     // 3. Verify: re-read touched ranges and scan for newly introduced errors.
     const problems: string[] = [];
     for (const op of cs.ops) {
-      if (op.kind !== 'write_range' && op.kind !== 'clear_range') continue;
+      if (op.kind !== 'write_range' && op.kind !== 'clear_range' && op.kind !== 'sort_range') continue;
       const after = await this.executor.readRange(op.range);
       for (const [r, row] of after.entries()) {
         for (const [c, cell] of row.entries()) {

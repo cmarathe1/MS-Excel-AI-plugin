@@ -9,9 +9,16 @@ import type { CellData, ChangeOp, WorkbookMap } from '@excelai/shared';
  *
  * Contract tests run against both so the emulator cannot silently drift.
  */
+export interface FindMatch {
+  address: string;
+  value: string;
+}
+
 export interface WorkbookExecutor {
   getWorkbookMap(): Promise<WorkbookMap>;
   readRange(range: string): Promise<CellData[][]>;
+  /** Case-insensitive substring search over cell values. Capped result list. */
+  find(query: string, sheet?: string): Promise<FindMatch[]>;
   /** Apply already-approved change ops, in order. Atomic per call where the host allows. */
   applyOps(ops: ChangeOp[]): Promise<void>;
 }

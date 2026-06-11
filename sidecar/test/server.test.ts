@@ -42,6 +42,17 @@ describe('sidecar HTTP API', () => {
     expect(forged.status).toBe(401);
   });
 
+  it('allows DELETE in CORS preflights (model deletion from the webview)', async () => {
+    sidecar = await startServer({ db: openDb(':memory:'), port: 0 });
+    const res = await fetch(`http://127.0.0.1:${sidecar.port}/api/settings/providers/x`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://excel.officeapps.live.com' },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-methods')).toContain('DELETE');
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://excel.officeapps.live.com');
+  });
+
   it('pairs once only', async () => {
     const { base } = await boot();
 

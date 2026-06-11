@@ -4,7 +4,7 @@ import {
   type ChangeOp,
   type ServerMessage,
 } from '@excelai/shared';
-import { applyOps, getWorkbookMap, readRange } from './officeBridge.js';
+import { applyOps, findCells, getWorkbookMap, readRange } from './officeBridge.js';
 
 export const SIDECAR_BASE = `http://127.0.0.1:8923`;
 
@@ -131,7 +131,10 @@ export function connect(options: {
             let result: unknown;
             if (tool === 'get_workbook_map') result = await getWorkbookMap();
             else if (tool === 'read_range') result = await readRange((args as { range: string }).range);
-            else throw new Error(`Add-in cannot execute tool: ${tool}`);
+            else if (tool === 'find') {
+              const a = args as { query: string; sheet?: string };
+              result = await findCells(a.query, a.sheet);
+            } else throw new Error(`Add-in cannot execute tool: ${tool}`);
             ws.send(JSON.stringify(makeEnvelope('tool_result', { requestId, ok: true, result })));
           } catch (e) {
             ws.send(

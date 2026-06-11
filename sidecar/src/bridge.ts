@@ -5,7 +5,7 @@ import {
   type ChangeOp,
   type WorkbookMap,
 } from '@excelai/shared';
-import type { WorkbookExecutor } from './workbook/executor.js';
+import type { FindMatch, WorkbookExecutor } from './workbook/executor.js';
 
 const READ_TIMEOUT_MS = 60_000;
 const APPLY_TIMEOUT_MS = 120_000;
@@ -47,6 +47,10 @@ export class BridgeExecutor implements WorkbookExecutor {
 
   async readRange(range: string): Promise<CellData[][]> {
     return (await this.request('read_range', { range }, READ_TIMEOUT_MS)) as CellData[][];
+  }
+
+  async find(query: string, sheet?: string): Promise<FindMatch[]> {
+    return (await this.request('find', { query, sheet }, READ_TIMEOUT_MS)) as FindMatch[];
   }
 
   async applyOps(ops: ChangeOp[]): Promise<void> {
