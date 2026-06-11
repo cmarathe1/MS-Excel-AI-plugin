@@ -6,7 +6,13 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { PROTOCOL_VERSION, type ClientMessage } from '@excelai/shared';
 import { z } from 'zod';
 import { Auth } from './auth.js';
-import { loadSettings, redactSettings, saveSettings } from './config.js';
+import {
+  activeProvider,
+  loadSettings,
+  redactProvider,
+  saveSettings,
+  type StoredProvider,
+} from './config.js';
 import type { Db } from './db.js';
 import { Ledger } from './ledger.js';
 import { MemoryStore } from './memory/store.js';
@@ -48,13 +54,13 @@ export async function startServer(options: {
 
   let cachedProvider: { provider: Provider; fingerprint: string } | null = null;
   const getProvider = (): Provider => {
-    const settings = loadSettings();
-    if (!settings.provider) {
+    const active = activeProvider(loadSettings());
+    if (!active) {
       throw new ProviderError('No model configured. Open Settings in the task pane and add one.');
     }
-    const fingerprint = JSON.stringify(settings.provider);
+    const fingerprint = JSON.stringify(active);
     if (!cachedProvider || cachedProvider.fingerprint !== fingerprint) {
-      cachedProvider = { provider: createProvider(settings.provider), fingerprint };
+      cachedProvider = { provider: createProvider(active), fingerprint };
     }
     return cachedProvider.provider;
   };
@@ -112,68 +118,106 @@ export async function startServer(options: {
         return;
       }
 
-      if (url.pathname === '/api/settings/provider' && req.method === 'GET') {
-        sendJson(res, 200, redactSettings(loadSettings()));
+      if (url.pathname === '/api/auth/check' && req.method === 'GET') {
+        sendJson(res, 200, { ok: true });
         return;
       }
-      if (url.pathname === '/api/settings/provider' && req.method === 'PUT') {
+
+      /* ----- saved model configurations ----- */
+
+      if (url.pathname === '/api/settings/providers' && req.method === 'GET') {
+        const settings = loadSettings();
+        sendJson(res, 200, {
+          providers: settings.providers.map(redactProvider),
+          activeProviderId: settings.activeProviderId,
+        });
+        return;
+      }
+      if (url.pathname === '/api/settings/providers' && req.method === 'POST') {
         const parsed = providerConfigSchema.safeParse(await readJson(req));
         if (!parsed.success) {
           sendJson(res, 400, { error: parsed.error.issues.map((i) => i.message).join('; ') });
           return;
         }
-        const existing = loadSettings();
-        const next = parsed.data;
-        // Editing other fields must not silently drop a stored key: an empty
-        // apiKey on an update of the same provider kind keeps the old one.
-        if (!next.apiKey && existing.provider?.kind === next.kind && existing.provider.apiKey) {
-          next.apiKey = existing.provider.apiKey;
-        }
-        saveSettings({ ...existing, provider: next });
+        const settings = loadSettings();
+        const stored: StoredProvider = { ...parsed.data, id: crypto.randomUUID() };
+        settings.providers.push(stored);
+        // First saved model becomes active automatically.
+        if (!settings.activeProviderId) settings.activeProviderId = stored.id;
+        saveSettings(settings);
         cachedProvider = null;
-        sendJson(res, 200, { ok: true });
+        sendJson(res, 200, { id: stored.id, activeProviderId: settings.activeProviderId });
         return;
       }
-      if (url.pathname === '/api/settings/provider/test' && req.method === 'POST') {
+
+      const providerRoute = /^\/api\/settings\/providers\/([\w-]+)(?:\/(activate|test))?$/.exec(
+        url.pathname,
+      );
+      if (providerRoute) {
+        const [, id, action] = providerRoute;
+        const settings = loadSettings();
+        const stored = settings.providers.find((p) => p.id === id);
+
+        if (!action && req.method === 'DELETE') {
+          if (!stored) {
+            sendJson(res, 404, { error: 'No such model configuration' });
+            return;
+          }
+          settings.providers = settings.providers.filter((p) => p.id !== id);
+          if (settings.activeProviderId === id) {
+            settings.activeProviderId = settings.providers[0]?.id ?? null;
+          }
+          saveSettings(settings);
+          cachedProvider = null;
+          sendJson(res, 200, { ok: true, activeProviderId: settings.activeProviderId });
+          return;
+        }
+        if (action === 'activate' && req.method === 'POST') {
+          if (!stored) {
+            sendJson(res, 404, { error: 'No such model configuration' });
+            return;
+          }
+          settings.activeProviderId = stored.id;
+          saveSettings(settings);
+          cachedProvider = null;
+          sendJson(res, 200, { ok: true, activeProviderId: stored.id });
+          return;
+        }
+        if (action === 'test' && req.method === 'POST') {
+          if (!stored) {
+            sendJson(res, 404, { ok: false, error: 'No such model configuration' });
+            return;
+          }
+          sendJson(res, 200, await testProviderConfig(stored, ledger));
+          return;
+        }
+      }
+
+      /** Test a candidate configuration before saving it. */
+      if (url.pathname === '/api/settings/providers/test' && req.method === 'POST') {
         const parsed = providerConfigSchema.safeParse(await readJson(req));
         if (!parsed.success) {
           sendJson(res, 400, { ok: false, error: parsed.error.issues.map((i) => i.message).join('; ') });
           return;
         }
-        // Same keep-existing-key rule as PUT so "Test" works on a saved key.
-        const existing = loadSettings();
-        const candidate = parsed.data;
-        if (!candidate.apiKey && existing.provider?.kind === candidate.kind && existing.provider.apiKey) {
-          candidate.apiKey = existing.provider.apiKey;
+        sendJson(res, 200, await testProviderConfig(parsed.data, ledger));
+        return;
+      }
+
+      /** Best-effort model discovery for the add/edit form (and an Ollama
+       *  readiness check: lists the models actually installed). */
+      if (url.pathname === '/api/providers/models' && req.method === 'POST') {
+        const schema = z.object({
+          kind: z.enum(['anthropic', 'openai', 'openai-compatible']),
+          apiKey: z.string().optional(),
+          baseUrl: z.string().url().optional(),
+        });
+        const parsed = schema.safeParse(await readJson(req));
+        if (!parsed.success) {
+          sendJson(res, 400, { models: [], error: 'Invalid request' });
+          return;
         }
-        try {
-          const provider = createProvider(candidate);
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 20_000);
-          const response = await provider
-            .chat({
-              messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-              maxTokens: 16,
-              temperature: 0,
-              abortSignal: controller.signal,
-            })
-            .finally(() => clearTimeout(timer));
-          ledger.record({
-            provider: provider.id,
-            model: provider.model,
-            feature: 'probe',
-            ...response.usage,
-          });
-          sendJson(res, 200, { ok: true, reply: response.text.trim().slice(0, 80) });
-        } catch (e) {
-          const message =
-            e instanceof Error && e.name === 'AbortError'
-              ? 'Timed out after 20s — is the endpoint reachable?'
-              : e instanceof Error
-                ? e.message
-                : String(e);
-          sendJson(res, 200, { ok: false, error: message });
-        }
+        sendJson(res, 200, await listModels(parsed.data));
         return;
       }
       if (url.pathname === '/api/functions/run' && req.method === 'POST') {
@@ -345,6 +389,83 @@ export async function startServer(options: {
 }
 
 /* ---------------- helpers ---------------- */
+
+async function testProviderConfig(
+  config: Parameters<typeof createProvider>[0],
+  ledger: Ledger,
+): Promise<{ ok: boolean; reply?: string; error?: string }> {
+  try {
+    const provider = createProvider(config);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    const response = await provider
+      .chat({
+        messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+        maxTokens: 16,
+        temperature: 0,
+        abortSignal: controller.signal,
+      })
+      .finally(() => clearTimeout(timer));
+    ledger.record({
+      provider: provider.id,
+      model: provider.model,
+      feature: 'probe',
+      ...response.usage,
+    });
+    return { ok: true, reply: response.text.trim().slice(0, 80) };
+  } catch (e) {
+    const message =
+      e instanceof Error && e.name === 'AbortError'
+        ? 'Timed out after 20s — is the endpoint reachable?'
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    return { ok: false, error: message };
+  }
+}
+
+async function listModels(config: {
+  kind: 'anthropic' | 'openai' | 'openai-compatible';
+  apiKey?: string;
+  baseUrl?: string;
+}): Promise<{ models: string[]; error?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    let endpoint: string;
+    const headers: Record<string, string> = {};
+    if (config.kind === 'anthropic') {
+      endpoint = `${config.baseUrl ?? 'https://api.anthropic.com'}/v1/models`;
+      if (config.apiKey) headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      const base = config.baseUrl ?? 'https://api.openai.com/v1';
+      endpoint = `${base.replace(/\/$/, '')}/models`;
+      if (config.apiKey) headers.authorization = `Bearer ${config.apiKey}`;
+    }
+    const res = await fetch(endpoint, { headers, signal: controller.signal });
+    if (!res.ok) return { models: [], error: `Endpoint answered ${res.status}` };
+    const data = (await res.json()) as { data?: { id?: string }[]; models?: { id?: string }[] };
+    const items = data.data ?? data.models ?? [];
+    const models = items
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === 'string')
+      .sort();
+    return { models };
+  } catch (e) {
+    return {
+      models: [],
+      error:
+        e instanceof Error && e.name === 'AbortError'
+          ? 'Timed out — endpoint unreachable'
+          : e instanceof Error
+            ? e.message
+            : String(e),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function bearerToken(req: IncomingMessage): string | null {
   const header = req.headers.authorization;

@@ -118,6 +118,74 @@ describe('OpenAI / OpenAI-compatible adapter', () => {
   });
 });
 
+describe('OpenAI parameter adaptation (newer models)', () => {
+  it('switches max_tokens -> max_completion_tokens on the documented 400 and remembers it', async () => {
+    const calls = stubFetch((_url, init) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if ('max_tokens' in body) {
+        return {
+          status: 400,
+          body: {
+            error: {
+              message:
+                "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: { choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }] },
+      };
+    });
+
+    const p = new OpenAIProvider('gpt-5.2', 'key');
+    const res = await p.chat({ messages: [{ role: 'user', content: 'x' }], maxTokens: 100 });
+    expect(res.text).toBe('hi');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.body).toMatchObject({ max_completion_tokens: 100 });
+
+    // Second request uses the learned parameter immediately — no extra 400.
+    await p.chat({ messages: [{ role: 'user', content: 'y' }], maxTokens: 50 });
+    expect(calls).toHaveLength(3);
+    expect(calls[2]!.body).toMatchObject({ max_completion_tokens: 50 });
+  });
+
+  it('drops temperature when the model rejects it', async () => {
+    const calls = stubFetch((_url, init) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if ('temperature' in body) {
+        return {
+          status: 400,
+          body: {
+            error: { message: "Unsupported value: 'temperature' does not support 0 with this model." },
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] },
+      };
+    });
+
+    const p = new OpenAIProvider('o-reasoner', 'key');
+    const res = await p.chat({ messages: [{ role: 'user', content: 'x' }], temperature: 0 });
+    expect(res.text).toBe('ok');
+    expect(calls).toHaveLength(2);
+    expect('temperature' in (calls[1]!.body as Record<string, unknown>)).toBe(false);
+  });
+
+  it('does not loop on unrelated 400s', async () => {
+    const calls = stubFetch(() => ({
+      status: 400,
+      body: { error: { message: 'Invalid request: messages must not be empty' } },
+    }));
+    const p = new OpenAIProvider('gpt-test', 'key');
+    await expect(p.chat({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow('400');
+    expect(calls.length).toBeLessThanOrEqual(2);
+  });
+});
+
 describe('withRetry', () => {
   it('retries retryable errors with backoff then succeeds', async () => {
     let attempts = 0;

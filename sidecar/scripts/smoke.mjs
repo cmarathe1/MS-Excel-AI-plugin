@@ -103,8 +103,8 @@ log('paired');
 const unauth = await fetch(`${base}/api/ledger/summary`);
 if (unauth.status !== 401) fail('unauthenticated request was not rejected');
 
-const put = await fetch(`${base}/api/settings/provider`, {
-  method: 'PUT',
+const post = await fetch(`${base}/api/settings/providers`, {
+  method: 'POST',
   headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   body: JSON.stringify({
     kind: 'openai-compatible',
@@ -112,8 +112,10 @@ const put = await fetch(`${base}/api/settings/provider`, {
     baseUrl: `http://127.0.0.1:${modelPort}/v1`,
   }),
 });
-if (put.status !== 200) fail(`provider settings rejected: ${put.status}`);
-log('provider configured (openai-compatible -> mock)');
+if (post.status !== 200) fail(`provider settings rejected: ${post.status}`);
+const { activeProviderId } = await post.json();
+if (!activeProviderId) fail('first saved model was not auto-activated');
+log('provider configured and auto-activated (openai-compatible -> mock)');
 
 /* 4. Fake add-in: emulator answers tool requests over the WS protocol. */
 const workbook = new WorkbookEmulator(['Sheet1']);

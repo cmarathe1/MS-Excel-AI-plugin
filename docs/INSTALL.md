@@ -37,17 +37,30 @@ Sanity check: open <http://localhost:8923/api/health> in a browser — you shoul
 
 An **Excel AI** button appears on the Home ribbon.
 
-## 3. Pair and pick a model
+## 3. Pair and add your models
 
 1. Click **Excel AI** on the ribbon — the task pane opens and reports "✓ Sidecar detected".
-2. Enter the **pairing code** from the sidecar console (one-time).
-3. Settings opens automatically. Pick a provider:
-   - **Ollama (free, local):** choose *OpenAI-compatible*, click **Use Ollama defaults**
-     (`http://localhost:11434/v1`, model `llama3.1`). Run `ollama pull llama3.1` first.
-   - **Anthropic:** model e.g. `claude-sonnet-4-6`, paste your API key.
-   - **OpenAI:** model e.g. `gpt-5.2`, paste your API key.
-4. Click **Test connection** — you should see `✓ Connected — model replied: "OK"`.
-5. **Save**, switch to **Chat**.
+2. Enter the **pairing code** from the sidecar console. This is one-time: the pairing
+   survives sidecar restarts (tokens live in `~/.excelai`). You'll only re-pair if you
+   delete that folder — the pane detects this and returns to the pairing screen, and a
+   **Re-pair** button is always available in the connection banner.
+3. Settings opens automatically. You can save **multiple models** and switch any time:
+   - **Ollama (free, local):** choose *OpenAI-compatible* → **Use Ollama defaults** →
+     **List available models** shows exactly what's installed → pick one → **Add model**.
+   - **Anthropic / OpenAI:** paste your API key, click **List available models** (or type
+     a model id), **Add model**.
+4. Each saved model is a card showing provider, endpoint and masked key, with
+   **Use** (make active), **Test** (live round-trip — expect `✓ "OK"`), and **Delete**.
+   The **active model** is marked on its card and shown as a chip in the chat header.
+
+### Is Ollama ready out of the box?
+
+Almost — two commands once: install Ollama from [ollama.com](https://ollama.com), then
+`ollama pull llama3.1` (any tool-capable model works: `llama3.1`, `qwen3`, `mistral-nemo`).
+The desktop app keeps the server running automatically. No CORS/`OLLAMA_ORIGINS` setup is
+needed — the sidecar talks to Ollama server-to-server, not from the browser. **List
+available models** in Settings doubles as the readiness check: if your installed models
+appear, you're ready.
 
 ## 4. Try it
 
@@ -64,9 +77,10 @@ An **Excel AI** button appears on the Home ribbon.
 |---|---|
 | Task pane: "Sidecar not detected" | Is `pnpm dev:sidecar` running? Port 8923 free? Set `EXCELAI_PORT` and edit the manifest URLs if you must change it. |
 | "Invalid or already-used pairing code" | Codes are single-use. Restart the sidecar for a fresh code (existing pairings stay valid). |
-| Test connection: `✗ … 401` | Wrong/expired API key. Re-paste it and test again. |
-| Test connection times out (Ollama) | Is `ollama serve` running? Does `ollama list` show your model? Base URL must end in `/v1`. |
-| Chat: "No model configured" | Open Settings, save a provider. |
+| Test: `✗ … 401` | Wrong/expired API key. Delete the model card and re-add with the right key. |
+| Test: `✗ … unsupported parameter` | Should not happen — the OpenAI adapter auto-adapts `max_tokens`/`temperature` for newer models. If you still see it, report the exact message. |
+| Test times out (Ollama) | Is Ollama running? Does `ollama list` show your model? Base URL must end in `/v1`. Use **List available models** to verify. |
+| Chat: "No model configured" | Open Settings, add a model (the first one becomes active automatically). |
 | `=EXCELAI.AI` shows `#NAME?` | The add-in isn't loaded in this workbook — open the task pane once, then re-enter the formula. |
 | `=EXCELAI.AI` shows `#VALUE!` with "Not paired" | Open the task pane and complete pairing first. |
 | Upload rejected / pane blank on another machine | The manifest points at `http://localhost:8923` — sidecar and Excel must run on the **same machine**. |

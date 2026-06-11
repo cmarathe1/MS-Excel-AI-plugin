@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangePreviewItem } from '@excelai/shared';
 import {
   api,
+  checkAuth,
+  clearToken,
   connect,
   getToken,
   pair,
@@ -18,12 +20,27 @@ type ChatItem =
   | { kind: 'error'; text: string }
   | { kind: 'changeset'; id: string; preview: ChangePreviewItem[]; status: 'staged' | 'applied' | 'rejected' | 'undone' };
 
-interface ProviderForm {
-  kind: 'anthropic' | 'openai' | 'openai-compatible';
+type ProviderKind = 'anthropic' | 'openai' | 'openai-compatible';
+
+interface SavedProvider {
+  id: string;
+  kind: ProviderKind;
   model: string;
-  apiKey: string;
-  baseUrl: string;
+  baseUrl?: string;
+  /** masked, presence means a key is stored */
+  apiKey?: string;
 }
+
+interface ProviderList {
+  providers: SavedProvider[];
+  activeProviderId: string | null;
+}
+
+const KIND_LABELS: Record<ProviderKind, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  'openai-compatible': 'OpenAI-compatible (Ollama, LM Studio, …)',
+};
 
 export function App(): JSX.Element {
   const [paired, setPaired] = useState<boolean>(() => getToken() !== null);
@@ -34,18 +51,37 @@ export function App(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [connectAttempt, setConnectAttempt] = useState(0);
+  const [activeModel, setActiveModel] = useState<string | null>(null);
   const connection = useRef<SidecarConnection | null>(null);
 
-  // First-run flow: if no model is configured yet, open Settings directly.
+  const unpair = useCallback((): void => {
+    clearToken();
+    connection.current?.close();
+    setPaired(false);
+  }, []);
+
+  // Stale token (sidecar data reset) -> back to pairing automatically.
   useEffect(() => {
     if (!paired) return;
-    void api<{ provider?: { model?: string } }>('/api/settings/provider').then(
-      (s) => {
-        if (!s.provider?.model) setShowSettings(true);
+    void checkAuth().then((ok) => {
+      if (!ok) unpair();
+    });
+  }, [paired, unpair]);
+
+  const refreshActiveModel = useCallback((): void => {
+    void api<ProviderList>('/api/settings/providers').then(
+      (list) => {
+        const active = list.providers.find((p) => p.id === list.activeProviderId);
+        setActiveModel(active ? active.model : null);
+        if (!active) setShowSettings(true); // first run: configure a model
       },
       () => {},
     );
-  }, [paired]);
+  }, []);
+
+  useEffect(() => {
+    if (paired) refreshActiveModel();
+  }, [paired, refreshActiveModel]);
 
   // Auto-reconnect with a fixed backoff while the sidecar is unreachable.
   useEffect(() => {
@@ -136,6 +172,11 @@ export function App(): JSX.Element {
       <header>
         <span className={`dot ${status}`} title={statusDetail} />
         <strong>Excel AI</strong>
+        {activeModel && !showSettings && (
+          <button className="chip" title="Change model" onClick={() => setShowSettings(true)}>
+            {activeModel}
+          </button>
+        )}
         {status !== 'connected' && (
           <button
             className="ghost"
@@ -147,7 +188,13 @@ export function App(): JSX.Element {
             Reconnect
           </button>
         )}
-        <button className="ghost" onClick={() => setShowSettings((s) => !s)}>
+        <button
+          className="ghost"
+          onClick={() => {
+            if (showSettings) refreshActiveModel();
+            setShowSettings((s) => !s);
+          }}
+        >
           {showSettings ? 'Chat' : 'Settings'}
         </button>
       </header>
@@ -155,12 +202,15 @@ export function App(): JSX.Element {
         <p className="hint banner">
           {status === 'connecting'
             ? 'Connecting to the sidecar…'
-            : `Not connected${statusDetail ? ` — ${statusDetail}` : ''}. Is the sidecar running? (pnpm dev:sidecar)`}
+            : `Not connected${statusDetail ? ` — ${statusDetail}` : ''}. Is the sidecar running? (pnpm dev:sidecar)`}{' '}
+          <button className="link" onClick={unpair}>
+            Re-pair
+          </button>
         </p>
       )}
 
       {showSettings ? (
-        <SettingsScreen />
+        <ModelsScreen onChanged={refreshActiveModel} />
       ) : (
         <>
           <main className="chat">
@@ -168,6 +218,7 @@ export function App(): JSX.Element {
               <p className="hint">
                 Ask anything about this workbook. Edits are staged for your approval — nothing
                 changes without your OK.
+                {activeModel ? ` Using ${activeModel}.` : ''}
               </p>
             )}
             {items.map((item, i) => (
@@ -343,122 +394,243 @@ function PairingScreen({ onPaired }: { onPaired: () => void }): JSX.Element {
   );
 }
 
-function SettingsScreen(): JSX.Element {
-  const [form, setForm] = useState<ProviderForm>({
-    kind: 'anthropic',
-    model: '',
-    apiKey: '',
-    baseUrl: '',
-  });
-  const [message, setMessage] = useState('');
-  const [testing, setTesting] = useState(false);
+/* ----------------------- model management ----------------------- */
 
-  const testConnection = (): void => {
-    setTesting(true);
+interface AddForm {
+  kind: ProviderKind;
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}
+
+const EMPTY_FORM: AddForm = { kind: 'anthropic', model: '', apiKey: '', baseUrl: '' };
+
+function ModelsScreen({ onChanged }: { onChanged: () => void }): JSX.Element {
+  const [list, setList] = useState<ProviderList>({ providers: [], activeProviderId: null });
+  const [form, setForm] = useState<AddForm>(EMPTY_FORM);
+  const [showAdd, setShowAdd] = useState(false);
+  const [message, setMessage] = useState('');
+  const [rowMessage, setRowMessage] = useState<Record<string, string>>({});
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [busyAction, setBusyAction] = useState('');
+
+  const load = useCallback((): void => {
+    void api<ProviderList>('/api/settings/providers').then(
+      (l) => {
+        setList(l);
+        if (l.providers.length === 0) setShowAdd(true);
+      },
+      (e: unknown) => setMessage(String(e instanceof Error ? e.message : e)),
+    );
+  }, []);
+
+  useEffect(load, [load]);
+
+  const formBody = (): Record<string, unknown> => {
+    const body: Record<string, unknown> = { kind: form.kind, model: form.model.trim() };
+    if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
+    if (form.baseUrl.trim()) body.baseUrl = form.baseUrl.trim();
+    return body;
+  };
+
+  const addModel = (): void => {
+    setBusyAction('add');
+    void api('/api/settings/providers', { method: 'POST', body: JSON.stringify(formBody()) })
+      .then(() => {
+        setForm(EMPTY_FORM);
+        setShowAdd(false);
+        setSuggestions([]);
+        setMessage('Model added.');
+        load();
+        onChanged();
+      })
+      .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setBusyAction(''));
+  };
+
+  const testCandidate = (): void => {
+    setBusyAction('test');
     setMessage('Testing…');
-    const body: Record<string, string> = { kind: form.kind, model: form.model };
-    if (form.apiKey) body.apiKey = form.apiKey;
-    if (form.baseUrl) body.baseUrl = form.baseUrl;
-    void api<{ ok: boolean; reply?: string; error?: string }>('/api/settings/provider/test', {
+    void api<{ ok: boolean; reply?: string; error?: string }>('/api/settings/providers/test', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(formBody()),
     })
       .then((r) =>
         setMessage(r.ok ? `✓ Connected — model replied: "${r.reply ?? ''}"` : `✗ ${r.error ?? 'Failed'}`),
       )
       .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => setTesting(false));
+      .finally(() => setBusyAction(''));
   };
 
-  useEffect(() => {
-    void api<{ provider?: Partial<ProviderForm> }>('/api/settings/provider').then(
-      (s) => {
-        if (s.provider) {
-          setForm((f) => ({
-            ...f,
-            kind: s.provider!.kind ?? 'anthropic',
-            model: s.provider!.model ?? '',
-            baseUrl: s.provider!.baseUrl ?? '',
-          }));
-        }
-      },
-      () => {},
-    );
-  }, []);
+  const loadModels = (): void => {
+    setBusyAction('models');
+    setMessage('Fetching available models…');
+    const body: Record<string, unknown> = { kind: form.kind };
+    if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
+    if (form.baseUrl.trim()) body.baseUrl = form.baseUrl.trim();
+    void api<{ models: string[]; error?: string }>('/api/providers/models', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+      .then((r) => {
+        setSuggestions(r.models);
+        setMessage(
+          r.models.length > 0
+            ? `${r.models.length} models available — pick one from the Model field.`
+            : `✗ ${r.error ?? 'No models found'}`,
+        );
+      })
+      .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setBusyAction(''));
+  };
 
-  const save = (): void => {
-    const body: Record<string, string> = { kind: form.kind, model: form.model };
-    if (form.apiKey) body.apiKey = form.apiKey;
-    if (form.baseUrl) body.baseUrl = form.baseUrl;
-    void api('/api/settings/provider', { method: 'PUT', body: JSON.stringify(body) }).then(
-      () => setMessage('Saved.'),
-      (e: unknown) => setMessage(e instanceof Error ? e.message : String(e)),
-    );
+  const activate = (id: string): void => {
+    void api(`/api/settings/providers/${id}/activate`, { method: 'POST' }).then(() => {
+      load();
+      onChanged();
+    });
+  };
+
+  const remove = (id: string): void => {
+    void api(`/api/settings/providers/${id}`, { method: 'DELETE' }).then(() => {
+      load();
+      onChanged();
+    });
+  };
+
+  const testSaved = (id: string): void => {
+    setRowMessage((m) => ({ ...m, [id]: 'Testing…' }));
+    void api<{ ok: boolean; reply?: string; error?: string }>(
+      `/api/settings/providers/${id}/test`,
+      { method: 'POST' },
+    )
+      .then((r) =>
+        setRowMessage((m) => ({
+          ...m,
+          [id]: r.ok ? `✓ "${r.reply ?? ''}"` : `✗ ${r.error ?? 'Failed'}`,
+        })),
+      )
+      .catch((e: unknown) =>
+        setRowMessage((m) => ({ ...m, [id]: `✗ ${e instanceof Error ? e.message : String(e)}` })),
+      );
   };
 
   return (
     <main className="settings">
-      <h3>Model</h3>
-      <label>
-        Provider
-        <select
-          value={form.kind}
-          onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderForm['kind'] })}
-        >
-          <option value="anthropic">Anthropic</option>
-          <option value="openai">OpenAI</option>
-          <option value="openai-compatible">OpenAI-compatible (Ollama, LM Studio, …)</option>
-        </select>
-      </label>
-      <label>
-        Model
-        <input
-          value={form.model}
-          placeholder={form.kind === 'openai-compatible' ? 'llama3.1' : 'model id'}
-          onChange={(e) => setForm({ ...form, model: e.target.value })}
-        />
-      </label>
-      {form.kind === 'openai-compatible' && (
-        <>
+      <h3>Your models</h3>
+      {list.providers.length === 0 && <p className="hint">No models yet — add one below.</p>}
+      {list.providers.map((p) => {
+        const active = p.id === list.activeProviderId;
+        return (
+          <div key={p.id} className={`model-card${active ? ' active' : ''}`}>
+            <div className="model-card-main">
+              <strong>{p.model}</strong> {active && <span className="badge applied">active</span>}
+              <div className="hint">
+                {KIND_LABELS[p.kind]}
+                {p.baseUrl ? ` · ${p.baseUrl}` : ''}
+                {p.apiKey ? ` · key ${p.apiKey}` : ' · no key'}
+              </div>
+              {rowMessage[p.id] && <div className="hint">{rowMessage[p.id]}</div>}
+            </div>
+            <div className="actions">
+              {!active && <button onClick={() => activate(p.id)}>Use</button>}
+              <button className="ghost" onClick={() => testSaved(p.id)}>
+                Test
+              </button>
+              <button className="ghost danger" onClick={() => remove(p.id)}>
+                Delete
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {!showAdd ? (
+        <button className="ghost" onClick={() => setShowAdd(true)}>
+          + Add a model
+        </button>
+      ) : (
+        <div className="add-form">
+          <h3>Add a model</h3>
           <label>
-            Base URL
+            Provider
+            <select
+              value={form.kind}
+              onChange={(e) => {
+                setSuggestions([]);
+                setForm({ ...form, kind: e.target.value as ProviderKind });
+              }}
+            >
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="openai-compatible">OpenAI-compatible (Ollama, LM Studio, …)</option>
+            </select>
+          </label>
+          {form.kind === 'openai-compatible' && (
+            <>
+              <label>
+                Base URL
+                <input
+                  value={form.baseUrl}
+                  placeholder="http://localhost:11434/v1"
+                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                />
+              </label>
+              <button
+                className="ghost"
+                onClick={() =>
+                  setForm({ ...form, baseUrl: 'http://localhost:11434/v1', model: form.model || 'llama3.1' })
+                }
+              >
+                Use Ollama defaults
+              </button>
+            </>
+          )}
+          <label>
+            API key {form.kind === 'openai-compatible' && <em>(optional)</em>}
             <input
-              value={form.baseUrl}
-              placeholder="http://localhost:11434/v1"
-              onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+              type="password"
+              value={form.apiKey}
+              placeholder="stored locally by the sidecar, never sent elsewhere"
+              onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
             />
           </label>
-          <button
-            className="ghost"
-            onClick={() =>
-              setForm({
-                ...form,
-                baseUrl: 'http://localhost:11434/v1',
-                model: form.model || 'llama3.1',
-              })
-            }
-          >
-            Use Ollama defaults
-          </button>
-        </>
+          <label>
+            Model
+            <input
+              value={form.model}
+              list="model-suggestions"
+              placeholder={form.kind === 'openai-compatible' ? 'llama3.1' : 'model id'}
+              onChange={(e) => setForm({ ...form, model: e.target.value })}
+            />
+            <datalist id="model-suggestions">
+              {suggestions.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+          <div className="actions">
+            <button
+              className="ghost"
+              onClick={loadModels}
+              disabled={busyAction !== '' || (form.kind !== 'openai' && form.kind !== 'anthropic' && !form.baseUrl)}
+            >
+              {busyAction === 'models' ? 'Fetching…' : 'List available models'}
+            </button>
+            <button className="ghost" onClick={testCandidate} disabled={!form.model || busyAction !== ''}>
+              {busyAction === 'test' ? 'Testing…' : 'Test'}
+            </button>
+            <button onClick={addModel} disabled={!form.model || busyAction !== ''}>
+              {busyAction === 'add' ? 'Adding…' : 'Add model'}
+            </button>
+            {list.providers.length > 0 && (
+              <button className="ghost" onClick={() => setShowAdd(false)}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
       )}
-      <label>
-        API key {form.kind === 'openai-compatible' && <em>(optional)</em>}
-        <input
-          type="password"
-          value={form.apiKey}
-          placeholder="stored locally by the sidecar, never sent elsewhere"
-          onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-        />
-      </label>
-      <div className="actions">
-        <button onClick={save} disabled={!form.model}>
-          Save
-        </button>
-        <button className="ghost" onClick={testConnection} disabled={!form.model || testing}>
-          {testing ? 'Testing…' : 'Test connection'}
-        </button>
-      </div>
       {message && <p className="hint">{message}</p>}
     </main>
   );

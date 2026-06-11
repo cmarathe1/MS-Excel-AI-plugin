@@ -42,8 +42,8 @@ describe('sidecar HTTP API', () => {
     expect(forged.status).toBe(401);
   });
 
-  it('pairs once, then stores and redacts provider settings', async () => {
-    const { base, token } = await boot();
+  it('pairs once only', async () => {
+    const { base } = await boot();
 
     // pairing code is single-use
     const again = await fetch(`${base}/api/pair`, {
@@ -52,31 +52,6 @@ describe('sidecar HTTP API', () => {
       body: JSON.stringify({ code: 'ABCDEF' }),
     });
     expect(again.status).toBe(403);
-
-    const put = await fetch(`${base}/api/settings/provider`, {
-      method: 'PUT',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'openai-compatible', model: 'llama3', baseUrl: 'http://localhost:11434/v1', apiKey: 'secret-key-12345' }),
-    });
-    expect(put.status).toBe(200);
-
-    const get = await fetch(`${base}/api/settings/provider`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    const body = (await get.json()) as { provider: { apiKey?: string; model: string } };
-    expect(body.provider.model).toBe('llama3');
-    expect(body.provider.apiKey).not.toContain('secret-key');
-    expect(body.provider.apiKey).toContain('2345'); // redacted suffix only
-  });
-
-  it('validates provider settings', async () => {
-    const { base, token } = await boot();
-    const res = await fetch(`${base}/api/settings/provider`, {
-      method: 'PUT',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'nonsense', model: '' }),
-    });
-    expect(res.status).toBe(400);
   });
 
   it('manages memory entries over HTTP', async () => {

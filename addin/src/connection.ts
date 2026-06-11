@@ -14,6 +14,28 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Is the stored token still valid? Returns false only on a definite 401
+ * (e.g. the sidecar's data dir was reset) — an unreachable sidecar is a
+ * connectivity problem, not a pairing problem.
+ */
+export async function checkAuth(): Promise<boolean> {
+  const token = getToken();
+  if (!token) return false;
+  try {
+    const res = await fetch(`${SIDECAR_BASE}/api/auth/check`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    return res.status !== 401;
+  } catch {
+    return true;
+  }
+}
+
 export async function pair(code: string): Promise<void> {
   const res = await fetch(`${SIDECAR_BASE}/api/pair`, {
     method: 'POST',

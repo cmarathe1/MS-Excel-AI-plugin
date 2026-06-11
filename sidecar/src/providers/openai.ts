@@ -10,9 +10,18 @@ import {
  * OpenAI Chat Completions adapter. With a custom baseUrl this same adapter
  * speaks to Ollama, LM Studio, vLLM, llama.cpp server, LiteLLM and any other
  * OpenAI-compatible endpoint — that's what makes "any model" true.
+ *
+ * Newer OpenAI models renamed `max_tokens` to `max_completion_tokens` and
+ * some reject `temperature` overrides entirely, while most compatible
+ * servers still expect the classic parameters. Rather than hard-coding model
+ * lists, the adapter retries a 400 that names an offending parameter with an
+ * adjusted body and remembers the working shape for the rest of the session.
  */
 export class OpenAIProvider implements Provider {
   readonly supportsTools = true;
+
+  private maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
+  private sendTemperature = true;
 
   constructor(
     readonly model: string,
@@ -22,6 +31,40 @@ export class OpenAIProvider implements Provider {
   ) {}
 
   async chat(options: ChatRequestOptions): Promise<ChatResponse> {
+    // At most one retry per adaptable parameter.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await this.send(options);
+      if (res.ok) return this.parse(res);
+
+      const text = await res.text().catch(() => '');
+      if (res.status === 400 && this.adaptParams(text)) continue;
+
+      throw new ProviderError(
+        `${this.id} API error ${res.status}: ${truncate(text)}`,
+        res.status,
+        res.status === 429 || res.status >= 500,
+      );
+    }
+    throw new ProviderError(`${this.id}: request failed after parameter adaptation`);
+  }
+
+  /** Returns true if the 400 named a parameter we can adjust. */
+  private adaptParams(errorText: string): boolean {
+    const lower = errorText.toLowerCase();
+    const unsupported = /unsupported|not supported|does not support|invalid/.test(lower);
+    if (!unsupported) return false;
+    if (this.maxTokensParam === 'max_tokens' && lower.includes('max_tokens')) {
+      this.maxTokensParam = 'max_completion_tokens';
+      return true;
+    }
+    if (this.sendTemperature && lower.includes('temperature')) {
+      this.sendTemperature = false;
+      return true;
+    }
+    return false;
+  }
+
+  private async send(options: ChatRequestOptions): Promise<Response> {
     const messages: unknown[] = options.messages.map((m) => {
       switch (m.role) {
         case 'system':
@@ -47,9 +90,11 @@ export class OpenAIProvider implements Provider {
     const body: Record<string, unknown> = {
       model: this.model,
       messages,
-      max_tokens: options.maxTokens ?? 4096,
+      [this.maxTokensParam]: options.maxTokens ?? 4096,
     };
-    if (options.temperature !== undefined) body.temperature = options.temperature;
+    if (this.sendTemperature && options.temperature !== undefined) {
+      body.temperature = options.temperature;
+    }
     if (options.tools && options.tools.length > 0) {
       body.tools = options.tools.map((t) => ({
         type: 'function',
@@ -60,22 +105,15 @@ export class OpenAIProvider implements Provider {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    return fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: options.abortSignal ?? null,
     });
+  }
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new ProviderError(
-        `${this.id} API error ${res.status}: ${truncate(text)}`,
-        res.status,
-        res.status === 429 || res.status >= 500,
-      );
-    }
-
+  private async parse(res: Response): Promise<ChatResponse> {
     const data = (await res.json()) as {
       choices?: {
         message?: {
