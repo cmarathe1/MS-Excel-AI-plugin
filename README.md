@@ -52,4 +52,4 @@ Then follow **[docs/INSTALL.md](docs/INSTALL.md)** — sideload `addin/manifest.
 
 ## License
 
-MIT (planned).
+[MIT](LICENSE) © the MS-Excel-AI-plugin contributors.
