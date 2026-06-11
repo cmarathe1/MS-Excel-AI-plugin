@@ -40,6 +40,9 @@ export class Session {
       return;
     }
     this.busy = true;
+    const startedAt = Date.now();
+    let totalIn = 0;
+    let totalOut = 0;
     try {
       const provider = this.getProvider();
 
@@ -58,19 +61,27 @@ export class Session {
         history: this.history,
         userMessage: message + memoryNote,
         onEvent: (ev) => this.emit(ev),
-        onUsage: (usage) =>
+        onUsage: (usage) => {
+          totalIn += usage.inputTokens;
+          totalOut += usage.outputTokens;
           this.ledger.record({
             provider: provider.id,
             model: provider.model,
             feature: 'chat',
             ...usage,
-          }),
+          });
+        },
       });
       this.history = result.history;
       // Bound history growth; compaction lands with the indexer work.
       if (this.history.length > 60) this.history = this.history.slice(-40);
+      console.log(
+        `[chat] ${this.workbookName} · ${provider.model} · ${Date.now() - startedAt}ms · tokens ${totalIn} in / ${totalOut} out${result.stagedChangeSetId ? ' · change-set staged' : ''}`,
+      );
     } catch (e) {
-      this.emit({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`[chat] turn failed after ${Date.now() - startedAt}ms: ${message}`);
+      this.emit({ kind: 'error', message });
     } finally {
       this.busy = false;
       this.emit({ kind: 'done' });

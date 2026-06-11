@@ -53,6 +53,12 @@ export function App(): JSX.Element {
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [activeModel, setActiveModel] = useState<string | null>(null);
   const connection = useRef<SidecarConnection | null>(null);
+  const chatRef = useRef<HTMLElement | null>(null);
+
+  // Keep the latest message in view.
+  useEffect(() => {
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight });
+  }, [items, busy]);
 
   const unpair = useCallback((): void => {
     clearToken();
@@ -213,13 +219,12 @@ export function App(): JSX.Element {
         <ModelsScreen onChanged={refreshActiveModel} />
       ) : (
         <>
-          <main className="chat">
+          <main className="chat" ref={chatRef}>
             {items.length === 0 && (
-              <p className="hint">
-                Ask anything about this workbook. Edits are staged for your approval — nothing
-                changes without your OK.
-                {activeModel ? ` Using ${activeModel}.` : ''}
-              </p>
+              <div className="empty">
+                <div className="empty-title">Ask anything about this workbook</div>
+                <div className="empty-sub">Edits are proposed first — nothing changes until you approve.</div>
+              </div>
             )}
             {items.map((item, i) => (
               <ChatBubble
@@ -237,23 +242,35 @@ export function App(): JSX.Element {
                 onUndo={(id) => connection.current?.undo(id)}
               />
             ))}
-            {busy && <p className="hint">Working…</p>}
+            {busy && (
+              <div className="typing" aria-label="Working">
+                <span /><span /><span />
+              </div>
+            )}
           </main>
           <footer>
-            <textarea
-              value={input}
-              placeholder="e.g. Sum column B into B20 and explain what this sheet does"
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-            />
-            <button onClick={sendMessage} disabled={busy || status !== 'connected'}>
-              Send
-            </button>
+            <div className="composer">
+              <textarea
+                value={input}
+                rows={1}
+                placeholder="Ask about this sheet… (Shift+Enter for a new line)"
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+              />
+              <button
+                className="send"
+                aria-label="Send"
+                onClick={sendMessage}
+                disabled={busy || status !== 'connected' || !input.trim()}
+              >
+                ↑
+              </button>
+            </div>
           </footer>
         </>
       )}
@@ -277,66 +294,80 @@ function ChatBubble(props: {
       return <div className="toolnote">🔧 {item.text}</div>;
     case 'error':
       return <div className="bubble error">{item.text}</div>;
-    case 'changeset':
+    case 'changeset': {
+      const n = item.preview.length;
       return (
-        <div className="changeset">
-          <div className="changeset-head">
-            Proposed changes <span className={`badge ${item.status}`}>{item.status}</span>
+        <div className={`cs ${item.status}`}>
+          <div className="cs-head">
+            <span className="cs-title">
+              {item.status === 'staged'
+                ? `${n} proposed change${n === 1 ? '' : 's'}`
+                : item.status === 'applied'
+                  ? 'Applied'
+                  : item.status === 'undone'
+                    ? 'Undone'
+                    : 'Dismissed'}
+            </span>
+            <span className="cs-actions">
+              {item.status === 'staged' && (
+                <>
+                  <button className="sm" onClick={() => props.onApprove(item.id)}>
+                    Apply
+                  </button>
+                  <button className="sm subtle" onClick={() => props.onReject(item.id)}>
+                    Dismiss
+                  </button>
+                </>
+              )}
+              {item.status === 'applied' && (
+                <button className="sm subtle" onClick={() => props.onUndo(item.id)}>
+                  Undo
+                </button>
+              )}
+            </span>
           </div>
-          <ul>
+          <ul className="cs-ops">
             {item.preview.map((p, i) => (
-              <li key={i}>
-                <OpSummary item={p} />
-              </li>
+              <OpRow key={i} item={p} />
             ))}
           </ul>
-          {item.status === 'staged' && (
-            <div className="actions">
-              <button onClick={() => props.onApprove(item.id)}>Apply</button>
-              <button className="ghost" onClick={() => props.onReject(item.id)}>
-                Reject
-              </button>
-            </div>
-          )}
-          {item.status === 'applied' && (
-            <div className="actions">
-              <button className="ghost" onClick={() => props.onUndo(item.id)}>
-                Undo
-              </button>
-            </div>
-          )}
         </div>
       );
+    }
   }
 }
 
-function OpSummary({ item }: { item: ChangePreviewItem }): JSX.Element {
+function OpRow({ item }: { item: ChangePreviewItem }): JSX.Element {
   const { op } = item;
+  let target: string;
+  let desc: string;
   switch (op.kind) {
     case 'write_range': {
-      const cellCount = op.cells.length * (op.cells[0]?.length ?? 0);
-      return (
-        <span>
-          <code>{op.range}</code> — write {cellCount} cell{cellCount === 1 ? '' : 's'}
-          <em> · {op.reason}</em>
-        </span>
-      );
+      const cells = op.cells.length * (op.cells[0]?.length ?? 0);
+      target = op.range;
+      desc = cells === 1 ? 'write' : `write ${cells} cells`;
+      break;
     }
     case 'clear_range':
-      return (
-        <span>
-          <code>{op.range}</code> — clear
-          <em> · {op.reason}</em>
-        </span>
-      );
+      target = op.range;
+      desc = 'clear';
+      break;
+    case 'format_range':
+      target = op.range;
+      desc = `format: ${Object.keys(op.format).join(', ')}`;
+      break;
     case 'add_sheet':
-      return (
-        <span>
-          new sheet <code>{op.name}</code>
-          <em> · {op.reason}</em>
-        </span>
-      );
+      target = op.name;
+      desc = 'new sheet';
+      break;
   }
+  return (
+    <li title={`${target} · ${op.reason}`}>
+      <code>{target.replace(/^[^!]*!/, '')}</code>
+      <span className="cs-desc">{desc}</span>
+      <span className="cs-reason">{op.reason}</span>
+    </li>
+  );
 }
 
 function PairingScreen({ onPaired }: { onPaired: () => void }): JSX.Element {

@@ -82,6 +82,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   ];
 
   const pendingOps: ChangeOp[] = [];
+  let emittedAnything = false;
+  const emit = (ev: AgentEvent): void => {
+    emittedAnything = true;
+    onEvent(ev);
+  };
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     const response = await withRetry(() =>
@@ -89,6 +94,9 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
         messages,
         tools: provider.supportsTools ? specs : undefined,
         temperature: 0,
+        // Reasoning models spend completion tokens on internal reasoning
+        // before any visible output; a small budget yields empty replies.
+        maxTokens: 16384,
       }),
     );
     onUsage?.(response.usage);
@@ -105,16 +113,36 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
       }
     }
 
-    if (assistantText.trim()) onEvent({ kind: 'text', text: assistantText });
+    if (assistantText.trim()) emit({ kind: 'text', text: assistantText });
 
     messages.push({ role: 'assistant', content: assistantText, toolCalls });
 
-    if (toolCalls.length === 0) break;
+    if (toolCalls.length === 0) {
+      // A turn must never end in silence: explain empty replies.
+      if (!assistantText.trim()) {
+        emit({
+          kind: 'error',
+          message:
+            response.stopReason === 'max_tokens'
+              ? 'The model ran out of output tokens before producing a reply (it may have spent them on internal reasoning). Try a shorter request, or a model with a larger output budget.'
+              : 'The model returned an empty reply. Try rephrasing, or test the model in Settings.',
+        });
+      }
+      break;
+    }
 
     for (const call of toolCalls) {
-      const result = await executeToolCall(call.name, call.argsJson, executor, pendingOps, onEvent);
+      const result = await executeToolCall(call.name, call.argsJson, executor, pendingOps, emit);
       messages.push({ role: 'tool', toolCallId: call.id, content: result });
     }
+  }
+
+  // Loop exhausted while the model was still calling tools.
+  if (messages[messages.length - 1]?.role === 'tool') {
+    emit({
+      kind: 'error',
+      message: `Stopped after ${maxIterations} steps without a final answer. You can ask the model to continue.`,
+    });
   }
 
   const result: AgentTurnResult = {
@@ -125,8 +153,16 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   if (pendingOps.length > 0) {
     const cs = changeSets.stage(pendingOps);
     const preview = await changeSets.preview(cs.id);
-    onEvent({ kind: 'changeset_staged', changeSetId: cs.id, preview });
+    emit({ kind: 'changeset_staged', changeSetId: cs.id, preview });
     result.stagedChangeSetId = cs.id;
+  }
+
+  if (!emittedAnything) {
+    // Belt and braces: whatever happened above, the user gets a signal.
+    onEvent({
+      kind: 'error',
+      message: 'The model produced no visible output for this turn. Check the sidecar console for details.',
+    });
   }
 
   return result;
@@ -214,6 +250,13 @@ function toChangeOp(name: ToolName, args: Record<string, unknown>): ChangeOp {
     }
     case 'clear_range':
       return { kind: 'clear_range', range: args.range as string, reason: args.reason as string };
+    case 'format_range':
+      return {
+        kind: 'format_range',
+        range: args.range as string,
+        format: args.format as Extract<ChangeOp, { kind: 'format_range' }>['format'],
+        reason: args.reason as string,
+      };
     case 'add_sheet':
       return { kind: 'add_sheet', name: args.name as string, reason: args.reason as string };
     default:
@@ -226,6 +269,7 @@ function summarize(name: ToolName, args: Record<string, unknown>): string {
     case 'read_range':
     case 'write_range':
     case 'clear_range':
+    case 'format_range':
       return String(args.range ?? '');
     case 'add_sheet':
       return String(args.name ?? '');

@@ -116,6 +116,61 @@ describe('agent loop (full integration against the emulator)', () => {
     );
   });
 
+  it('stages formatting alongside values and applies both', async () => {
+    const wb = new WorkbookEmulator(['Sheet1']);
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          {
+            name: 'write_range',
+            args: { range: 'Sheet1!B1', cells: [[1234.5]], reason: 'value' },
+          },
+          {
+            name: 'format_range',
+            args: {
+              range: 'Sheet1!B1',
+              format: { bold: true, numberFormat: '#,##0.00', fillColor: '#FFF2CC' },
+              reason: 'highlight the total',
+            },
+          },
+        ],
+      },
+      { text: 'Wrote and formatted B1.' },
+    ]);
+
+    const { stagedId, changeSets } = await runScript(wb, provider);
+    expect(stagedId).toBeDefined();
+    const cs = changeSets.get(stagedId!)!;
+    expect(cs.ops).toHaveLength(2);
+    expect(cs.undoFidelity).toBe('partial'); // formatting is not snapshot-restorable yet
+
+    const result = await changeSets.apply(stagedId!);
+    expect(result.ok).toBe(true);
+    expect(wb.getValue('Sheet1!B1')).toBe(1234.5);
+    expect(wb.getFormat('Sheet1!B1')).toMatchObject({
+      bold: true,
+      numberFormat: '#,##0.00',
+      fillColor: '#FFF2CC',
+    });
+  });
+
+  it('rejects malformed format payloads', async () => {
+    const wb = new WorkbookEmulator(['Sheet1']);
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          {
+            name: 'format_range',
+            args: { range: 'Sheet1!B1', format: {}, reason: 'empty format' },
+          },
+        ],
+      },
+      { text: 'ok' },
+    ]);
+    const { stagedId } = await runScript(wb, provider);
+    expect(stagedId).toBeUndefined(); // empty format object fails validation
+  });
+
   it('supports emulated tool calling for models without native tools', async () => {
     const wb = new WorkbookEmulator(['Sheet1']);
     wb.setCell('Sheet1!A1', 'hello');

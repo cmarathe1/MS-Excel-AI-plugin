@@ -43,6 +43,29 @@ export const toolSchemas = {
       .strict(),
     readonly: false,
   },
+  format_range: {
+    description:
+      'Apply formatting to a range: number format (e.g. "#,##0.00", "0%", "mm/dd/yyyy"), bold, italic, font/fill colors (#RRGGBB), horizontal alignment, column autofit. Staged into the change-set.',
+    parameters: z
+      .object({
+        range: z.string().min(1).describe('A1-style range, e.g. "Sheet1!A1:C1"'),
+        format: z
+          .object({
+            numberFormat: z.string().min(1).optional(),
+            bold: z.boolean().optional(),
+            italic: z.boolean().optional(),
+            fontColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+            fillColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+            horizontalAlignment: z.enum(['left', 'center', 'right']).optional(),
+            autofitColumns: z.boolean().optional(),
+          })
+          .strict()
+          .refine((f) => Object.keys(f).length > 0, 'format must set at least one property'),
+        reason: z.string().min(1).max(300),
+      })
+      .strict(),
+    readonly: false,
+  },
   add_sheet: {
     description: 'Create a new worksheet with the given name. Staged into the change-set.',
     parameters: z

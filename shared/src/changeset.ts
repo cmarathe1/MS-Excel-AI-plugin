@@ -5,6 +5,16 @@ import type { CellData, CellScalar } from './cells.js';
  * explicitly approved, applied, and undoable.
  */
 
+export interface CellFormat {
+  numberFormat?: string;
+  bold?: boolean;
+  italic?: boolean;
+  fontColor?: string;
+  fillColor?: string;
+  horizontalAlignment?: 'left' | 'center' | 'right';
+  autofitColumns?: boolean;
+}
+
 export type ChangeOp =
   | {
       kind: 'write_range';
@@ -14,6 +24,7 @@ export type ChangeOp =
       reason: string;
     }
   | { kind: 'clear_range'; range: string; reason: string }
+  | { kind: 'format_range'; range: string; format: CellFormat; reason: string }
   | { kind: 'add_sheet'; name: string; reason: string };
 
 export type ChangeSetStatus = 'staged' | 'applied' | 'rejected' | 'undone';

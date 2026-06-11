@@ -63,6 +63,31 @@ export async function applyOps(ops: ChangeOp[]): Promise<void> {
           getRange(context, op.range).clear(Excel.ClearApplyTo.contents);
           break;
         }
+        case 'format_range': {
+          const range = getRange(context, op.range);
+          const f = op.format;
+          if (f.numberFormat !== undefined) {
+            // numberFormat must be a matrix matching the range dimensions.
+            range.load(['rowCount', 'columnCount']);
+            await context.sync();
+            range.numberFormat = Array.from({ length: range.rowCount }, () =>
+              Array.from({ length: range.columnCount }, () => f.numberFormat!),
+            );
+          }
+          if (f.bold !== undefined) range.format.font.bold = f.bold;
+          if (f.italic !== undefined) range.format.font.italic = f.italic;
+          if (f.fontColor !== undefined) range.format.font.color = f.fontColor;
+          if (f.fillColor !== undefined) range.format.fill.color = f.fillColor;
+          if (f.horizontalAlignment !== undefined) {
+            range.format.horizontalAlignment = {
+              left: Excel.HorizontalAlignment.left,
+              center: Excel.HorizontalAlignment.center,
+              right: Excel.HorizontalAlignment.right,
+            }[f.horizontalAlignment];
+          }
+          if (f.autofitColumns) range.format.autofitColumns();
+          break;
+        }
         case 'write_range': {
           const range = getRange(context, op.range);
           // Setting `formulas` writes formulas for "=..." strings and treats

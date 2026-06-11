@@ -37,7 +37,9 @@ export class ChangeSetManager {
   ) {}
 
   stage(ops: ChangeOp[]): ChangeSet {
-    const hasStructural = ops.some((op) => op.kind === 'add_sheet');
+    // Sheet creation and formatting are not snapshot-restorable in v1:
+    // undo restores values/formulas exactly, but not prior formatting.
+    const hasStructural = ops.some((op) => op.kind === 'add_sheet' || op.kind === 'format_range');
     const cs: ChangeSet = {
       id: randomUUID(),
       workbookId: this.workbookId,
