@@ -5,6 +5,7 @@ import {
   connect,
   getToken,
   pair,
+  SIDECAR_BASE,
   type AgentEventPayload,
   type SidecarConnection,
 } from '../connection.js';
@@ -32,7 +33,29 @@ export function App(): JSX.Element {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const connection = useRef<SidecarConnection | null>(null);
+
+  // First-run flow: if no model is configured yet, open Settings directly.
+  useEffect(() => {
+    if (!paired) return;
+    void api<{ provider?: { model?: string } }>('/api/settings/provider').then(
+      (s) => {
+        if (!s.provider?.model) setShowSettings(true);
+      },
+      () => {},
+    );
+  }, [paired]);
+
+  // Auto-reconnect with a fixed backoff while the sidecar is unreachable.
+  useEffect(() => {
+    if (!paired || status === 'connected' || status === 'connecting') return;
+    const timer = setTimeout(() => {
+      setStatus('connecting');
+      setConnectAttempt((n) => n + 1);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [paired, status]);
 
   const handleEvent = useCallback((ev: AgentEventPayload) => {
     switch (ev.kind) {
@@ -93,7 +116,7 @@ export function App(): JSX.Element {
       }
     })();
     return () => conn?.close();
-  }, [paired, handleEvent]);
+  }, [paired, connectAttempt, handleEvent]);
 
   const sendMessage = (): void => {
     const text = input.trim();
@@ -113,10 +136,28 @@ export function App(): JSX.Element {
       <header>
         <span className={`dot ${status}`} title={statusDetail} />
         <strong>Excel AI</strong>
+        {status !== 'connected' && (
+          <button
+            className="ghost"
+            onClick={() => {
+              setStatus('connecting');
+              setConnectAttempt((n) => n + 1);
+            }}
+          >
+            Reconnect
+          </button>
+        )}
         <button className="ghost" onClick={() => setShowSettings((s) => !s)}>
           {showSettings ? 'Chat' : 'Settings'}
         </button>
       </header>
+      {status !== 'connected' && (
+        <p className="hint banner">
+          {status === 'connecting'
+            ? 'Connecting to the sidecar…'
+            : `Not connected${statusDetail ? ` — ${statusDetail}` : ''}. Is the sidecar running? (pnpm dev:sidecar)`}
+        </p>
+      )}
 
       {showSettings ? (
         <SettingsScreen />
@@ -250,11 +291,36 @@ function OpSummary({ item }: { item: ChangePreviewItem }): JSX.Element {
 function PairingScreen({ onPaired }: { onPaired: () => void }): JSX.Element {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
+  const [sidecarUp, setSidecarUp] = useState<boolean | null>(null);
+
+  // Poll health so the user can see the sidecar come alive while pairing.
+  useEffect(() => {
+    let stop = false;
+    const check = async (): Promise<void> => {
+      try {
+        const res = await fetch(`${SIDECAR_BASE}/api/health`);
+        if (!stop) setSidecarUp(res.ok);
+      } catch {
+        if (!stop) setSidecarUp(false);
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 3000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, []);
+
   return (
     <div className="app center">
       <h2>Pair with the companion app</h2>
       <p className="hint">
-        Start the sidecar (<code>pnpm dev:sidecar</code>) and enter the pairing code it prints.
+        {sidecarUp === true
+          ? '✓ Sidecar detected. Enter the pairing code from its console.'
+          : sidecarUp === false
+            ? 'Sidecar not detected — start it with: pnpm dev:sidecar'
+            : 'Looking for the sidecar…'}
       </p>
       <input
         value={code}
@@ -285,6 +351,24 @@ function SettingsScreen(): JSX.Element {
     baseUrl: '',
   });
   const [message, setMessage] = useState('');
+  const [testing, setTesting] = useState(false);
+
+  const testConnection = (): void => {
+    setTesting(true);
+    setMessage('Testing…');
+    const body: Record<string, string> = { kind: form.kind, model: form.model };
+    if (form.apiKey) body.apiKey = form.apiKey;
+    if (form.baseUrl) body.baseUrl = form.baseUrl;
+    void api<{ ok: boolean; reply?: string; error?: string }>('/api/settings/provider/test', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+      .then((r) =>
+        setMessage(r.ok ? `✓ Connected — model replied: "${r.reply ?? ''}"` : `✗ ${r.error ?? 'Failed'}`),
+      )
+      .catch((e: unknown) => setMessage(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setTesting(false));
+  };
 
   useEffect(() => {
     void api<{ provider?: Partial<ProviderForm> }>('/api/settings/provider').then(
@@ -335,14 +419,28 @@ function SettingsScreen(): JSX.Element {
         />
       </label>
       {form.kind === 'openai-compatible' && (
-        <label>
-          Base URL
-          <input
-            value={form.baseUrl}
-            placeholder="http://localhost:11434/v1"
-            onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-          />
-        </label>
+        <>
+          <label>
+            Base URL
+            <input
+              value={form.baseUrl}
+              placeholder="http://localhost:11434/v1"
+              onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+            />
+          </label>
+          <button
+            className="ghost"
+            onClick={() =>
+              setForm({
+                ...form,
+                baseUrl: 'http://localhost:11434/v1',
+                model: form.model || 'llama3.1',
+              })
+            }
+          >
+            Use Ollama defaults
+          </button>
+        </>
       )}
       <label>
         API key {form.kind === 'openai-compatible' && <em>(optional)</em>}
@@ -353,9 +451,14 @@ function SettingsScreen(): JSX.Element {
           onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
         />
       </label>
-      <button onClick={save} disabled={!form.model}>
-        Save
-      </button>
+      <div className="actions">
+        <button onClick={save} disabled={!form.model}>
+          Save
+        </button>
+        <button className="ghost" onClick={testConnection} disabled={!form.model || testing}>
+          {testing ? 'Testing…' : 'Test connection'}
+        </button>
+      </div>
       {message && <p className="hint">{message}</p>}
     </main>
   );

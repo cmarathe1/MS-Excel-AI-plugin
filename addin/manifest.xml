@@ -34,7 +34,7 @@
         <AllFormFactors>
           <ExtensionPoint xsi:type="CustomFunctions">
             <Script>
-              <SourceLocation resid="Functions.Script.Url"/>
+              <SourceLocation resid="Shared.Url"/>
             </Script>
             <Page>
               <SourceLocation resid="Shared.Url"/>
@@ -91,7 +91,6 @@
       </bt:Images>
       <bt:Urls>
         <bt:Url id="Shared.Url" DefaultValue="http://localhost:8923/taskpane.html"/>
-        <bt:Url id="Functions.Script.Url" DefaultValue="http://localhost:8923/assets/functions.js"/>
         <bt:Url id="Functions.Metadata.Url" DefaultValue="http://localhost:8923/functions.json"/>
         <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/cmarathe1/ms-excel-ai-plugin"/>
       </bt:Urls>

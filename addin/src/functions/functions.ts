@@ -59,7 +59,11 @@ export async function aiTranslate(text: string, targetLang: string): Promise<str
 }
 
 /* global CustomFunctions */
-CustomFunctions.associate('AI', ai);
-CustomFunctions.associate('AI_CLASSIFY', aiClassify);
-CustomFunctions.associate('AI_EXTRACT', aiExtract);
-CustomFunctions.associate('AI_TRANSLATE', aiTranslate);
+// With the shared runtime this module is imported by the task pane page;
+// associate only where the custom-functions runtime actually exists.
+if (typeof CustomFunctions !== 'undefined') {
+  CustomFunctions.associate('AI', ai);
+  CustomFunctions.associate('AI_CLASSIFY', aiClassify);
+  CustomFunctions.associate('AI_EXTRACT', aiExtract);
+  CustomFunctions.associate('AI_TRANSLATE', aiTranslate);
+}

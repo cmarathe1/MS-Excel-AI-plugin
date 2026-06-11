@@ -46,7 +46,7 @@ pnpm check && pnpm test && pnpm smoke   # typecheck, tests, full-stack E2E
 pnpm build && pnpm dev:sidecar          # start the sidecar (prints a pairing code)
 ```
 
-Then sideload `addin/manifest.xml` into Excel (web: Home → Add-ins → More Settings → Upload My Add-in), enter the pairing code in the task pane, pick your model, and chat.
+Then follow **[docs/INSTALL.md](docs/INSTALL.md)** — sideload `addin/manifest.xml` into Excel, enter the pairing code in the task pane, pick your model (Ollama works free and fully local; Anthropic/OpenAI keys also supported), hit **Test connection**, and chat.
 
 > Current dev targets: Excel on Windows and Excel on the web (Chromium). Excel for Mac needs an HTTPS-localhost story (WKWebView blocks mixed content) — tracked in the design risks.
 

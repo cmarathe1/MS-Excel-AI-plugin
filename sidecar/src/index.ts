@@ -16,7 +16,8 @@ async function main(): Promise<void> {
   });
 
   /* eslint-disable no-console */
-  console.log(`Excel AI sidecar listening on http://127.0.0.1:${sidecar.port}`);
+  const scheme = process.env.EXCELAI_TLS_CERT && process.env.EXCELAI_TLS_KEY ? 'https' : 'http';
+  console.log(`Excel AI sidecar listening on ${scheme}://127.0.0.1:${sidecar.port}`);
   if (sidecar.auth.currentPairingCode) {
     console.log(`Pairing code (enter it in the add-in once): ${sidecar.auth.currentPairingCode}`);
   }

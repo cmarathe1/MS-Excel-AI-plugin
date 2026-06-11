@@ -7,14 +7,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     rollupOptions: {
+      // Single shared-runtime page: the taskpane hosts chat UI and registers
+      // the custom functions (see manifest Script -> Shared.Url).
       input: {
         taskpane: resolve(__dirname, 'taskpane.html'),
-        functions: resolve(__dirname, 'functions.html'),
-      },
-      output: {
-        // The manifest references the functions script by a fixed name.
-        entryFileNames: (chunk) =>
-          chunk.name === 'functions' ? 'assets/functions.js' : 'assets/[name]-[hash].js',
       },
     },
   },

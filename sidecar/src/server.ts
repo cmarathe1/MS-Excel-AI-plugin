@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -58,11 +59,19 @@ export async function startServer(options: {
     return cachedProvider.provider;
   };
 
-  const server = createServer((req, res) => {
+  // Optional TLS (e.g. office-addin-dev-certs for hosts that require
+  // https://localhost): set EXCELAI_TLS_CERT and EXCELAI_TLS_KEY.
+  const tlsCert = process.env.EXCELAI_TLS_CERT;
+  const tlsKey = process.env.EXCELAI_TLS_KEY;
+  const handler = (req: IncomingMessage, res: ServerResponse): void => {
     void handleHttp(req, res).catch((e) => {
       sendJson(res, 500, { error: e instanceof Error ? e.message : 'Internal error' });
     });
-  });
+  };
+  const server: Server =
+    tlsCert && tlsKey
+      ? createHttpsServer({ cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }, handler)
+      : createServer(handler);
 
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -113,9 +122,58 @@ export async function startServer(options: {
           sendJson(res, 400, { error: parsed.error.issues.map((i) => i.message).join('; ') });
           return;
         }
-        saveSettings({ ...loadSettings(), provider: parsed.data });
+        const existing = loadSettings();
+        const next = parsed.data;
+        // Editing other fields must not silently drop a stored key: an empty
+        // apiKey on an update of the same provider kind keeps the old one.
+        if (!next.apiKey && existing.provider?.kind === next.kind && existing.provider.apiKey) {
+          next.apiKey = existing.provider.apiKey;
+        }
+        saveSettings({ ...existing, provider: next });
         cachedProvider = null;
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (url.pathname === '/api/settings/provider/test' && req.method === 'POST') {
+        const parsed = providerConfigSchema.safeParse(await readJson(req));
+        if (!parsed.success) {
+          sendJson(res, 400, { ok: false, error: parsed.error.issues.map((i) => i.message).join('; ') });
+          return;
+        }
+        // Same keep-existing-key rule as PUT so "Test" works on a saved key.
+        const existing = loadSettings();
+        const candidate = parsed.data;
+        if (!candidate.apiKey && existing.provider?.kind === candidate.kind && existing.provider.apiKey) {
+          candidate.apiKey = existing.provider.apiKey;
+        }
+        try {
+          const provider = createProvider(candidate);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20_000);
+          const response = await provider
+            .chat({
+              messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+              maxTokens: 16,
+              temperature: 0,
+              abortSignal: controller.signal,
+            })
+            .finally(() => clearTimeout(timer));
+          ledger.record({
+            provider: provider.id,
+            model: provider.model,
+            feature: 'probe',
+            ...response.usage,
+          });
+          sendJson(res, 200, { ok: true, reply: response.text.trim().slice(0, 80) });
+        } catch (e) {
+          const message =
+            e instanceof Error && e.name === 'AbortError'
+              ? 'Timed out after 20s — is the endpoint reachable?'
+              : e instanceof Error
+                ? e.message
+                : String(e);
+          sendJson(res, 200, { ok: false, error: message });
+        }
         return;
       }
       if (url.pathname === '/api/functions/run' && req.method === 'POST') {
